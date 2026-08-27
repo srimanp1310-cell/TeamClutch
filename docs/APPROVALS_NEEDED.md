@@ -84,9 +84,25 @@ Also: there's no git remote yet. Are you creating the GitHub repo, or should I?
 1. **Environment details** for the README and report: CPU, GPU, VRAM, driver
    version, WSL2 version, PyTorch version, CUDA version, Triton version, and
    the exact `pip install torch --index-url ...` line you used.
-2. **6 profiler traces** (Task 7), whenever you get to profiling — one chrome
+2. **6 profiler traces** (Task 7), whenever you get to profiling — one Chrome
    trace per shape (small / medium / large) for baseline and for the final
-   optimized path: `prof.export_chrome_trace("logs/trace_<name>.json")`.
+   optimized path. **The filenames matter**: `analysis/make_all.py` picks them
+   up by name and needs no configuration, so please use exactly
+
+   ```
+   logs/trace_small_baseline.json     logs/trace_small_optimized.json
+   logs/trace_medium_baseline.json    logs/trace_medium_optimized.json
+   logs/trace_large_baseline.json     logs/trace_large_optimized.json
+   ```
+
+   ```python
+   prof.export_chrome_trace("logs/trace_small_baseline.json")
+   ```
+
+   `.json.gz` works too. Everything downstream is built and tested already
+   against synthetic traces — the moment these land, the GPU-busy table, the
+   kernel-family breakdown and the timeline figures appear in
+   `results/summary.md` with no further work.
 3. **Your AI usage log entries.** The problem statement gives *bonus points* for
    this and it has to be written as you go, not reconstructed at the end. Just
    append to `docs/AI_USAGE.md` — there's a template at the top. One entry per

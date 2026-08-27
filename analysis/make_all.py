@@ -28,6 +28,9 @@ from analysis.load import (
     results_markdown_table, speedup_summary, status_counts, usable,
 )
 from analysis.roofline import RTX_4050_LAPTOP, plot_roofline, ridge_point
+from analysis.trace import (
+    busy_table, kernel_breakdown, load_trace, plot_busy_vs_shape, plot_timeline,
+)
 
 DEFAULT_RESULTS = "results/results.csv"
 DEFAULT_LOGS = "logs"
@@ -36,8 +39,46 @@ DEFAULT_SUMMARY = "results/summary.md"
 DEFAULT_DISPATCH = "results/dispatch_table.json"
 
 
+def _load_traces(logs_dir: Path) -> dict:
+    """`logs/trace_<shape>_<variant>.json` -> {"<shape>_<variant>": frame}.
+
+    Person A exports these from `torch.profiler`; the filename carries the
+    labels, so nothing has to be configured here.
+    """
+    traces = {}
+    for path in sorted(logs_dir.glob("trace_*.json*")):
+        label = path.name[len("trace_"):].split(".")[0]
+        try:
+            traces[label] = load_trace(path)
+        except (OSError, ValueError) as exc:
+            print(f"  [skipped] {path}: {exc}", file=sys.stderr)
+    return traces
+
+
+def _trace_figures(traces: dict, figure_dir: Path) -> List[Path]:
+    """Busy-vs-shape, plus one timeline per shape that has both variants."""
+    if not traces:
+        return []
+    produced = [plot_busy_vs_shape(traces, out_dir=figure_dir)]
+    shapes = {label.rsplit("_", 1)[0] for label in traces if "_" in label}
+    for shape in sorted(shapes):
+        baseline = traces.get(f"{shape}_baseline")
+        optimized = traces.get(f"{shape}_optimized")
+        if baseline is not None and optimized is not None:
+            produced.append(plot_timeline(
+                baseline, optimized, out_dir=figure_dir,
+                filename=f"trace_timeline_{shape}.png",
+                # A window sized to the shape: 1 ms shows individual launches at
+                # small shapes, where the gaps are the story; a fixed window
+                # would render large-shape kernels as one solid block.
+                window_ms=1.0 if shape == "small" else 20.0,
+            ))
+    return produced
+
+
 def _write_summary(frame, path: Path, figure_paths: Sequence[Path],
-                   source: Path = Path(DEFAULT_RESULTS)) -> Path:
+                   source: Path = Path(DEFAULT_RESULTS),
+                   traces: Optional[dict] = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     counts = status_counts(frame)
     summaries = speedup_summary(frame)
@@ -139,6 +180,45 @@ def _write_summary(frame, path: Path, figure_paths: Sequence[Path],
                 f"{row['best_speedup']:.3f}x | {runner} | {margin} |"
             )
 
+    if traces:
+        table = busy_table(traces).sort_values("trace")
+        lines += [
+            "",
+            "## Rung 0 — where the time goes",
+            "",
+            "GPU busy % is the fraction of the active window with a kernel "
+            "actually running. A low number means the GPU is starving between "
+            "launches: fusion and CUDA graphs pay off there, and a faster kernel "
+            "barely moves it. A high number means the kernels' own efficiency is "
+            "what is left to attack.",
+            "",
+            "| trace | GPU busy | verdict | span (ms) | idle (ms) | kernels | mean kernel (us) |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for _, row in table.iterrows():
+            lines.append(
+                f"| `{row['trace']}` | **{row['gpu_busy']:.1%}** | {row['verdict']} "
+                f"| {row['span_ms']:.2f} | {row['idle_ms']:.2f} | {row['kernels']} "
+                f"| {row['mean_kernel_us']:.1f} |"
+            )
+
+        busiest = max(traces, key=lambda label: len(traces[label]))
+        breakdown = kernel_breakdown(traces[busiest], by="family", top=8)
+        if not breakdown.empty:
+            lines += [
+                "",
+                f"Kernel time by family for `{busiest}`:",
+                "",
+                "| family | share | total (ms) | calls | mean (us) |",
+                "|---|---|---|---|---|",
+            ]
+            for _, row in breakdown.iterrows():
+                lines.append(
+                    f"| {row['family']} | {row['share']:.1%} "
+                    f"| {row['total_us'] / 1e3:.2f} | {int(row['calls'])} "
+                    f"| {row['mean_us']:.1f} |"
+                )
+
     lines += [
         "",
         "## Roofline reference",
@@ -208,12 +288,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if not clock_logs:
         print(f"  (no clock logs in {args.logs}/ — thermal figures skipped)")
 
+    traces = _load_traces(Path(args.logs))
+    for path in _trace_figures(traces, figure_dir):
+        produced.append(path)
+        print(f"  {path}")
+    if not traces:
+        print(f"  (no profiler traces in {args.logs}/ — trace figures skipped)")
+
     from analysis.load import write_dispatch_table
 
     dispatch_path = write_dispatch_table(frame, args.dispatch, capability=args.capability)
     print(f"  {dispatch_path}")
 
-    summary_path = _write_summary(frame, Path(args.summary), produced, results_path)
+    summary_path = _write_summary(frame, Path(args.summary), produced,
+                                  results_path, traces)
     print(f"  {summary_path}")
 
     crossover = crossover_table(frame)

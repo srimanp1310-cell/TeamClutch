@@ -62,6 +62,7 @@ python bench/sweep.py --strategy baseline --matrix quick     # control: every sp
 python bench/run_official.py --batch-size 8 --seq-len 1024   # the organizers' own script, our class injected
 python -m src.memcheck --batch 8 --seq-len 4096              # will this config OOM? (no GPU needed)
 python -m analysis.make_all                                  # regenerate every figure and results/summary.md
+                                                             # (picks up logs/trace_*.json and logs/clocks_*.csv automatically)
 ```
 
 To see what the figures look like before any GPU run exists, render them from

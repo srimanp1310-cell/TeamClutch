@@ -348,7 +348,7 @@ def test_make_all_runs_end_to_end(tmp_path):
 
     summary = (tmp_path / "summary.md").read_text()
     for heading in ("Row counts by status", "Speedup by strategy", "Dispatch",
-                    "Roofline reference"):
+                    "Rung 0 — where the time goes", "Roofline reference"):
         assert heading in summary
     assert "Control check" in summary and "PASS" in summary
 
@@ -358,6 +358,32 @@ def test_make_all_runs_end_to_end(tmp_path):
 def test_make_all_reports_a_missing_results_file(tmp_path, capsys):
     assert make_all.main(["--results", str(tmp_path / "nope.csv")]) == 1
     assert "no results" in capsys.readouterr().err
+
+
+def test_make_all_writes_trace_figures_when_traces_are_present(tmp_path):
+    """The fixture directory carries profiler traces; make_all must pick them
+    up by filename alone, with nothing to configure."""
+    make_all.main([
+        "--results", str(RESULTS), "--logs", str(FIXTURES),
+        "--figures", str(tmp_path / "f"), "--summary", str(tmp_path / "s.md"),
+        "--dispatch", str(tmp_path / "d.json"),
+    ])
+    figures_dir = tmp_path / "f"
+    assert (figures_dir / "gpu_busy_vs_shape.png").exists()
+    timelines = sorted(figures_dir.glob("trace_timeline_*.png"))
+    assert len(timelines) == 3  # small, medium, large
+
+
+def test_make_all_survives_a_logs_directory_with_no_traces(tmp_path):
+    """A sweep that has not been profiled yet is the normal early state."""
+    empty_logs = tmp_path / "logs"
+    empty_logs.mkdir()
+    assert make_all.main([
+        "--results", str(RESULTS), "--logs", str(empty_logs),
+        "--figures", str(tmp_path / "f2"), "--summary", str(tmp_path / "s2.md"),
+        "--dispatch", str(tmp_path / "d2.json"),
+    ]) == 0
+    assert "Rung 0" not in (tmp_path / "s2.md").read_text()
 
 
 def test_make_all_writes_one_thermal_figure_per_clock_log(tmp_path):

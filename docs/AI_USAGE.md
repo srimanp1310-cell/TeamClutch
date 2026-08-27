@@ -225,3 +225,38 @@ yields baseline, and the *same* table yields bf16 on sm_80), missing file to the
 hard-coded fallback, and CPU to baseline. A property test asserts every
 selection, across four capabilities and four shapes, names something present in
 the registry.
+
+## 2026-08-27 — Task 7: profiler-trace analysis
+**Tool:** Claude Code (Opus 5)
+**Prompt:** Read `PLAN_PERSON_B.md` Task 7, implement `analysis/trace.py`, run
+the acceptance test (busy fraction of a hand-built 50%-idle fixture must equal
+0.5 +/- 0.01), show output.
+**Output:** worked; one real bug in the parser and two of my own test bugs.
+**What I had to fix:**
+- **Empty traces raised a KeyError instead of returning nothing.** On a trace
+  with no complete events, assigning `frame["is_kernel"] = []` produced an
+  object-dtype column, and pandas reads `frame[object_series]` as *label*
+  selection rather than a boolean mask — so the caller got `KeyError: 'ts_us'`.
+  A trace with no GPU events is the normal case on a CPU box, so this would have
+  fired on the first person to run `make_all` without a GPU. Dtypes are now set
+  explicitly.
+- Two test-harness bugs of my own: a helper that read a `NamedTemporaryFile`
+  before the JSON was flushed, and then a fixture that the tests called as a
+  plain function.
+- **Chart fixes found by looking at the render**, again: the timeline's legend
+  was landing on the subtitle, and the busy-vs-shape legend was sitting on top
+  of a bar.
+**Design notes worth recording:**
+- GPU busy is computed from the *union* of kernel intervals, not the sum of
+  their durations. Kernels on different streams overlap, and summing would
+  report a GPU more than 100% busy.
+- Three spellings of the kernel category (`kernel`, `Kernel`, `gpu_op`) are all
+  accepted, because they have differed across PyTorch versions and missing one
+  yields a silent 0% busy — which reads as a real, catastrophic result rather
+  than a parser failure. There is a test per spelling.
+**Verification:** `pytest -q` green — 187 passed, 2 skipped, 1 xpassed, 9.3 s.
+The acceptance number is exact: the half-idle fixture measures 0.500. The six
+shape traces reproduce the Rung 0 story they were built to show — small shapes
+launch-bound at 52%, large ones occupied at 99%, and fusing raises the busy
+fraction at every shape. `make_all` now emits 13 figures in 1.1 s and writes the
+GPU-busy table and kernel-family breakdown into `results/summary.md`.
