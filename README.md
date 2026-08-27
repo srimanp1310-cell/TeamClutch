@@ -60,6 +60,7 @@ _TODO (Person A): confirm the exact index URL / Triton version used._
 pytest -q                                                    # correctness oracle, CPU, no GPU needed
 python bench/sweep.py --strategy baseline --matrix quick     # control: every speedup must be ~1.00x
 python bench/run_official.py --batch-size 8 --seq-len 1024   # the organizers' own script, our class injected
+python -m src.memcheck --batch 8 --seq-len 4096              # will this config OOM? (no GPU needed)
 python -m analysis.make_all                                  # regenerate every figure and results/summary.md
 ```
 

@@ -99,3 +99,37 @@ directly against the organizers' script at B=4 S=64 d=128 H=4 L=3 pad=0.3 seed
 (theirs) vs 1.3503 ms (ours), within CPU timing noise. Discard rule verified on
 the synthetic clock fixtures: throttling log mean 1815 MHz vs opening 2396 MHz
 -> `discard=True`; flat log 2398 vs 2395 -> `discard=False`.
+
+## 2026-08-27 — Task 3: official-runner wrapper and the CPU correctness oracle
+**Tool:** Claude Code (Opus 5)
+**Prompt:** Read `PLAN_PERSON_B.md` Task 3. Write `bench/run_official.py` and
+`tests/test_strategies.py`. Confirm the "baseline" strategy passes with
+`max_abs == 0.0` across all mask/causal/shape combinations on CPU.
+**Output:** worked; two of my own test expectations were wrong and one probe
+found a false assumption about the baseline.
+**What I had to fix:**
+- **A "wrong" strategy that wasn't wrong.** The oracle's self-test scaled the
+  output by 1.001 to prove the comparison can fail — but the pass rule is an
+  OR, and 0.1% is comfortably inside `rtol=0.01`, so it correctly passed.
+  Reworked to 1.02, which is just past rtol and past atol wherever `|ref| >
+  0.05`. That makes it a sensitivity bound (the smallest error the oracle must
+  never miss) instead of a smoke test.
+- **A renamed-parameter test expecting the wrong exception text.** Adding a
+  parameter to a strategy raises "Missing key(s)", not "Unexpected key(s)" —
+  the extra key is missing *from the baseline's* state_dict.
+- **A probe bug that turned out not to be a bug.** I first tested the
+  diagnostics by deleting the final `masked_fill` after `final_norm`, expecting
+  a padding failure. It passed, correctly: each block already zeroes padded
+  positions, and `nn.LayerNorm` initialises `bias=0`, so `final_norm(0) == 0`.
+  Replaced it with a causal off-by-one (`triu(diagonal=0)`), which fails only
+  the causal branch — the behaviour Task 3 is actually for.
+- **Added a NaN hint to the failure report.** The off-by-one probe produced
+  `max_abs_err: nan`, which reads like a broken metric. It isn't: a fully-masked
+  row makes softmax over all `-inf` return NaN. The report now says so and names
+  the two usual causes (causal diagonal, mask polarity).
+**Verification:** `pytest -q` green — 84 passed, 2 skipped (fp16/bf16 are only
+asserted where there is a GPU), 1 xpassed (bf16 on CPU, non-strict), 5.5 s.
+Diagnostics verified by injecting the causal off-by-one: `causal=False` passes
+and `causal=True` fails, with the failing branch named in the test id
+(`[causal-nopad-B2_S16_d64_H4-...]`). `run_official.py` runs the organizers'
+`main()` with our class injected and their file's SHA-256 unchanged.
