@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+
+# Scratch
+/tmp_results/
+*.tmp
+
+# NOTE: results/results.csv, results/figures/*.png and logs/*.csv are COMMITTED
+# on purpose — they are the evidence behind the report and the README table.
+# Only genuinely transient traces are ignored:
+logs/*.partial
