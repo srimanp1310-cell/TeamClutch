@@ -260,3 +260,37 @@ shape traces reproduce the Rung 0 story they were built to show — small shapes
 launch-bound at 52%, large ones occupied at 99%, and fusing raises the busy
 fraction at every shape. `make_all` now emits 13 figures in 1.1 s and writes the
 GPU-busy table and kernel-family breakdown into `results/summary.md`.
+
+## 2026-08-27 — Task 8: technical report, Devpost text, video script
+**Tool:** Claude Code (Opus 5)
+**Prompt:** Read `PLAN_PERSON_B.md` Task 8. Write `docs/TECH_REPORT.md`,
+`docs/DEVPOST.md` and `docs/VIDEO_SCRIPT.md` with the sections the plan and the
+problem statement require, drafting everything that does not depend on
+measurements and marking the slots that do.
+**Output:** worked. The useful discovery was how much of the report could be
+written *now*, with no GPU.
+**What I had to fix / decide:**
+- **The central quantitative claim needed no measurement at all.** I had assumed
+  §1 would be qualitative until Person A's numbers landed. It is not: running
+  `analysis/roofline.py` over the sweep's configurations shows the reference
+  implementation's arithmetic intensity *falling* from 64.6 to 32.3 FLOP/byte as
+  sequence length goes 512 → 4096, while a fused path's *rises* from 113.8 to
+  237.4 — crossing this card's 62.5 FLOP/byte ridge point around S=1024. That is
+  the entire argument for fused attention, derived analytically, and it is now a
+  table in §1.1 with a stated prediction that the measurements will either
+  confirm or contradict. Both outcomes are publishable; the prediction is on
+  record before the data.
+- **Placeholders needed to be owned and countable.** A report full of
+  undifferentiated TODOs is how a submission ships with the word TODO in it. Every
+  slot is now `<FILL A: …>` or `<FILL B: …>`, and `docs/check_ready.py` lists
+  them by owner and exits non-zero while any remain — 69 outstanding right now,
+  42 of them A's. It can gate the submission checklist.
+- **Structural checks rather than prose review.** `tests/test_docs.py` asserts
+  the sections the *problem statement* requires actually exist (Devpost's
+  "datasets used" field, the README's limitations section, the report's twelve
+  sections), that the SHA-256 quoted in the report still matches the file on
+  disk, and that the report contains the sentence disclaiming performance claims
+  on untested architectures. These are the things a late edit deletes silently.
+**Verification:** `pytest -q` green — 223 passed, 2 skipped, 1 xpassed, 9.6 s.
+`python docs/check_ready.py` correctly reports 69 outstanding placeholders and
+exits 1; on a directory with none it reports ready and exits 0.

@@ -106,7 +106,22 @@ _TODO — written from measured evidence, including negative results._
 See [docs/AI_USAGE.md](docs/AI_USAGE.md) for a contemporaneous, per-session log
 of which AI tools were used, what they produced, and what had to be corrected.
 
-## Repo map
+## Documents
 
-See `docs/INTERFACE.md` for the A↔B contract: strategy signature, masking
-semantics, registry, the `results.csv` schema, and the tolerance we target.
+| | |
+|---|---|
+| [docs/TECH_REPORT.md](docs/TECH_REPORT.md) | The full write-up: problem framing, profile, each optimization, dispatch, roofline, accuracy budget, thermal methodology, limitations. |
+| [docs/DEVPOST.md](docs/DEVPOST.md) | Devpost submission text, one section per required field. |
+| [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md) | 3-minute demo shot list with the exact commands to run on screen. |
+| [docs/INTERFACE.md](docs/INTERFACE.md) | The A↔B contract: strategy signature, masking semantics, registry, `results.csv` schema, tolerance. |
+| [docs/AI_USAGE.md](docs/AI_USAGE.md) | Per-session log of AI tool usage, written contemporaneously, corrections included. |
+| [docs/APPROVALS_NEEDED.md](docs/APPROVALS_NEEDED.md) | Open decisions and artefacts still owed between the two of us. |
+
+Before submitting, check nothing is still a placeholder:
+
+```bash
+python docs/check_ready.py
+```
+
+It exits non-zero while any `<FILL …>` marker remains, and `--owner A` / `--owner B`
+splits the remaining work by person.
