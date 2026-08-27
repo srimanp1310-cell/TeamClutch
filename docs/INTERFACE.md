@@ -140,6 +140,11 @@ parses into a `status` column:
 | `baseline OOM` | baseline could not run; optimized did. This is a *result*. |
 | `DISCARD:thermal` | clocks dropped >15% mid-run; row kept but excluded from summaries |
 
+A status prefix always comes **first** in `notes`; free text (`--notes`) and the
+`dirty` provenance marker are appended after it, separated by `; `. A prefix
+that is not at the start is not a prefix, and `analysis/load.py` derives the
+`status` column by matching on the start of the field.
+
 ---
 
 ## 5. Tolerance
