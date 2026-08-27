@@ -116,6 +116,7 @@ of which AI tools were used, what they produced, and what had to be corrected.
 | [docs/INTERFACE.md](docs/INTERFACE.md) | The A↔B contract: strategy signature, masking semantics, registry, `results.csv` schema, tolerance. |
 | [docs/AI_USAGE.md](docs/AI_USAGE.md) | Per-session log of AI tool usage, written contemporaneously, corrections included. |
 | [docs/APPROVALS_NEEDED.md](docs/APPROVALS_NEEDED.md) | Open decisions and artefacts still owed between the two of us. |
+| [docs/FOR_PERSON_A.md](docs/FOR_PERSON_A.md) | Onboarding for the second contributor: git workflow, file ownership, naming rules, and what already exists so it doesn't get rebuilt. |
 
 Before submitting, check nothing is still a placeholder:
 
