@@ -1,0 +1,18 @@
+# results.csv is an append-only log that BOTH people append to. A normal 3-way
+# merge sees two sets of new lines at the end of the file and calls it a
+# conflict; resolving that by hand means someone picks a side and silently
+# throws away the other person's measurements. `merge=union` keeps both sides'
+# lines, which is exactly the right semantics for an append-only log.
+results/results.csv merge=union
+
+# Same reasoning: both people append sessions to the AI usage log.
+docs/AI_USAGE.md merge=union
+
+# Don't try to diff or merge binaries.
+*.png binary
+*.pdf binary
+*.docx binary
+
+# Profiler traces are machine-generated JSON. Never hand-merge one.
+logs/trace_*.json -diff merge=ours
+logs/trace_*.json.gz binary
