@@ -179,7 +179,16 @@ _OFAT_AXES: Dict[str, Tuple[str, Sequence]] = {
 
 _MASK_COMBINATIONS = ((0.0, False), (0.3, False), (0.0, True), (0.3, True))
 
-MATRIX_NAMES = ("default", "quick", "seq", "batch", "dmodel", "dtype", "layers", "mask")
+#: layers x dtype, crossed. This is NOT one-factor-at-a-time, and it is the one
+#: place that has to break the OFAT rule: the accuracy-budget figure plots error
+#: against depth with a line per dtype, and an OFAT sweep only ever varies depth
+#: at the base dtype -- every other dtype ends up a single point, which is not a
+#: line. Twelve configs; run it once when there is time.
+_ACCURACY_LAYERS = (1, 2, 4, 6)
+_ACCURACY_DTYPES = ("float32", "float16", "bfloat16")
+
+MATRIX_NAMES = ("default", "quick", "seq", "batch", "dmodel", "dtype", "layers",
+                "mask", "accuracy")
 
 
 def build_matrix(name: str, base: RunSpec) -> List[RunSpec]:
@@ -191,6 +200,11 @@ def build_matrix(name: str, base: RunSpec) -> List[RunSpec]:
         specs = [
             replace(base, padding_ratio=pad, causal=causal)
             for pad, causal in _MASK_COMBINATIONS
+        ]
+    elif name == "accuracy":
+        specs = [
+            replace(base, layers=layers, dtype=dtype)
+            for dtype in _ACCURACY_DTYPES for layers in _ACCURACY_LAYERS
         ]
     elif name == "quick":
         # The 2-minute confidence check A runs after every rung.
@@ -217,6 +231,8 @@ def varied_axes(name: str) -> Tuple[str, ...]:
         return (_OFAT_AXES[name][0],)
     if name == "mask":
         return ("padding_ratio", "causal")
+    if name == "accuracy":
+        return ("layers", "dtype")
     if name == "quick":
         return ("seq_len", "dtype", "padding_ratio", "causal")
     if name == "default":

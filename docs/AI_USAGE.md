@@ -133,3 +133,56 @@ Diagnostics verified by injecting the causal off-by-one: `causal=False` passes
 and `causal=True` fails, with the failing branch named in the test id
 (`[causal-nopad-B2_S16_d64_H4-...]`). `run_official.py` runs the organizers'
 `main()` with our class injected and their file's SHA-256 unchanged.
+
+## 2026-08-27 — Task 4: analysis library, figures, roofline, dispatch table
+**Tool:** Claude Code (Opus 5), plus a data-visualisation reference for the
+palette and chart-design rules.
+**Prompt:** Read `PLAN_PERSON_B.md` Task 4. First write
+`tests/fixtures/make_synthetic.py` and generate the fixture. Then implement
+`analysis/load.py`, `figures.py`, `roofline.py`, `make_all.py` and
+`tests/test_analysis.py`. Run make_all on the fixture and list the PNGs.
+**Output:** worked, but building the figures exposed four defects that the code
+alone would not have shown — three of them only visible by *rendering the figure
+and looking at it*.
+**What I had to fix:**
+- **Compiled-baseline rows were silently replacing eager ones.** A
+  `--compile-baseline` run shares a config with its eager counterpart and
+  happens later, so `latest_per_config` treated it as a newer run of the same
+  experiment and dropped the eager row. It is a different experiment — the
+  denominator of the ratio is a different model — so every speedup line was
+  quietly showing the compiled-baseline number. Fixed by adding
+  `compile_baseline` to the config identity and excluding those rows from
+  `usable()` by default; only the survival figure asks for them.
+- **`vram_ceiling` drew a line that fell as sequence length grew**, which is
+  physically impossible. `groupby(seq_len).max()` was aggregating across
+  *different* configs that happened to share a sequence length. Added
+  `_ofat_slice`, which holds every other axis at its modal value; the speedup
+  figures use it too, and now state what was held fixed in the subtitle instead
+  of hedging with "median across configs".
+- **The plan's matrices cannot produce the accuracy-budget figure.** It wants
+  error vs depth with a line per dtype, but a strictly one-factor-at-a-time
+  sweep only varies depth at the base dtype, so fp16 and bf16 came out as single
+  points, not lines. Added `--matrix accuracy` (layers x dtype, crossed, 12
+  configs) — the one place the OFAT rule has to be broken, and the docstring
+  says why.
+- **The fixture produced physically impossible figures.** Latency was invented
+  independently of the FLOP model, so the roofline showed fp32 running at
+  60 TFLOP/s on a 12 TFLOP/s card. Latency is now derived from `forward_flops`
+  and a plausible efficiency that falls with sequence length. A test now asserts
+  no point exceeds its own roof.
+- Two chart-design corrections against the visualisation reference: the plan
+  specifies `thermal_trace` as SM clock on the left axis and temperature on the
+  right, but a dual-axis chart invites the reader to read meaning into where the
+  lines cross, which is an artefact of two arbitrary scalings — it is now two
+  stacked panels sharing the time axis, same data, no false crossing. And the
+  shared title helper was overlapping title with subtitle on every figure.
+- Cleared the synthetic-derived PNGs out of `results/` and made the summary
+  stamp its own provenance, so a fixture-derived table announces itself as fake
+  rather than looking like a result.
+**Verification:** `pytest -q` green — 127 passed, 2 skipped, 1 xpassed, 8.1 s.
+`make_all` end-to-end on the fixture in 0.95 s (budget was 30 s), producing 10
+PNGs, `dispatch_table.json` and `summary.md`. Ridge point checks out by hand:
+12.0 TFLOP/s / 192 GB/s = 62.5 FLOP/byte. Geometric mean verified against a
+hand-computed toy frame (2, 4, 8 -> exactly 4.0, where the arithmetic mean would
+say 4.67). Every figure was rendered and inspected, which is how three of the
+four defects above were found.

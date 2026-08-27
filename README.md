@@ -64,6 +64,16 @@ python -m src.memcheck --batch 8 --seq-len 4096              # will this config 
 python -m analysis.make_all                                  # regenerate every figure and results/summary.md
 ```
 
+To see what the figures look like before any GPU run exists, render them from
+the synthetic fixture into a scratch directory (the summary it writes is stamped
+SYNTHETIC, and nothing lands in `results/`):
+
+```bash
+python -m analysis.make_all --results tests/fixtures/results_synthetic.csv \
+  --logs tests/fixtures --figures /tmp/preview --summary /tmp/preview/summary.md \
+  --dispatch /tmp/preview/dispatch.json
+```
+
 Commands that require a GPU are marked _GPU/WSL2 only_ where they appear.
 Everything above except `run_official.py` at large shapes runs on macOS CPU.
 
