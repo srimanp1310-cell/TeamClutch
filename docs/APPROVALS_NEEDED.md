@@ -1,8 +1,10 @@
 # For Person A — things I need from you
 
-I've built the harness half of the repo (Tasks 0–2 of `PLAN_PERSON_B.md`).
-Before Day 1 I need a few decisions from you, because they're baked into files
-you'll be using and they're expensive to change later.
+I've built the harness half of the repo (Tasks 0–5 of `PLAN_PERSON_B.md`):
+skeleton, memory pre-check, sweep harness, correctness oracle, analysis and
+figures, and the dispatch layer. Before Day 1 I need a few decisions from you,
+because they're baked into files you'll be using and they're expensive to change
+later.
 
 Reply inline in this file, or just answer in chat — whatever's faster.
 
@@ -92,6 +94,15 @@ Also: there's no git remote yet. Are you creating the GitHub repo, or should I?
 4. **Your PR descriptions** — I'm writing report section 4 (one subsection per
    optimization: hypothesis → measured before/after → surprise) straight from
    them, so the more you write there, the less I have to invent.
+5. **One run of `--matrix accuracy`** (12 configs, layers × dtype crossed), when
+   you have the time. It's the only sweep that produces the accuracy-budget
+   figure: error vs depth needs a line per dtype, and a one-factor-at-a-time
+   sweep only varies depth at the base dtype, so fp16 and bf16 come out as
+   single points rather than lines.
+
+   ```bash
+   python bench/sweep.py --strategy <yours> --matrix accuracy
+   ```
 
 ---
 
@@ -126,6 +137,10 @@ class SdpaTransformer(BaselineTransformer):
 3. If it can't run on CPU (Triton, custom CUDA), set `REQUIRES_CUDA = True` on
    the class. My tests then print a visible SKIP on my Mac instead of a fake
    failure.
+   **Also** set `MIN_CAPABILITY` if the strategy needs specific hardware —
+   `(8, 0)` for a bf16 path, `(7, 5)` for Triton/flash. The dispatcher uses it
+   so an sm_75 card never gets handed a bf16 kernel. It guesses from the name
+   too, but a declaration beats the guess.
 4. Run `pytest -q` before every push. It's CPU-only and takes ~6 seconds.
 
 **Masking details that will bite you** — these are where a wrong implementation

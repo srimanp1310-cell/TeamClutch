@@ -104,6 +104,52 @@ registry for everyone.
 
 ---
 
+## 3b. Dispatch integration (`src/dispatch.py`)
+
+`src/optimized.py` — Person A's file — is the entry point the organizers' script
+instantiates. It picks a strategy per call and delegates:
+
+```python
+from src.baseline import BaselineTransformer
+from src.dispatch import DispatchKey, select_strategy, explain
+from src.strategies import get_strategy
+
+class UserOptimizedTransformer(BaselineTransformer):
+    def forward(self, x, valid_token_mask=None):
+        key = DispatchKey.from_forward(x, valid_token_mask, self.config)
+        name = select_strategy(key)
+        ...delegate to get_strategy(name)...
+```
+
+Three things worth knowing before wiring it up:
+
+1. **`select_strategy` is memoised.** Steady-state cost is a dict lookup on a
+   small tuple, so calling it per forward is fine. If a fresh sweep regenerates
+   `results/dispatch_table.json` inside a live process, call
+   `dispatch.clear_caches()`.
+
+2. **`DispatchKey.from_forward` can cost a device sync.** Deriving `padded`
+   means asking whether the mask is all-True, and on CUDA that reduction has to
+   be read back to the host. Pass `padded=` explicitly when you already know —
+   in the benchmark harness padding is a property of the config, known before
+   the call.
+
+3. **Declare `MIN_CAPABILITY` on any strategy that needs specific hardware**,
+   e.g. `MIN_CAPABILITY = (8, 0)` for a bf16 path or `(7, 5)` for Triton. This
+   is separate from `REQUIRES_CUDA`, which is a yes/no about running on CPU at
+   all. Dispatch also guesses from the name (anything containing `bf16` implies
+   (8,0); `triton` or `flash` implies (7,5)), because it must be able to reason
+   about a name that appears only in the generated JSON table — but a class that
+   declares its own requirement is always believed over the guess.
+
+Dispatch can only ever *remove* candidates, never invent them: a strategy that
+is not registered on this machine, or that needs hardware this card lacks, is
+never selected, and selection falls through to the nearest allowed measured
+neighbour, then the table default, then `"baseline"`. That is why the
+submission still runs on a machine with no `results/` directory at all.
+
+---
+
 ## 4. results.csv schema
 
 `results/results.csv` is **append-only**. Never regenerate it, never sort it in

@@ -186,3 +186,42 @@ PNGs, `dispatch_table.json` and `summary.md`. Ridge point checks out by hand:
 hand-computed toy frame (2, 4, 8 -> exactly 4.0, where the arithmetic mean would
 say 4.67). Every figure was rendered and inspected, which is how three of the
 four defects above were found.
+
+## 2026-08-27 — Task 5: shape and capability dispatch
+**Tool:** Claude Code (Opus 5)
+**Prompt:** Read `PLAN_PERSON_B.md` Task 5, implement `src/dispatch.py`, run the
+acceptance tests, show output.
+**Output:** worked; one real bug in my own caching, found by a test.
+**What I had to fix:**
+- **Memoisation was silently discarding capability requirements.** To make the
+  LRU cache key hashable I passed the available strategies as a tuple of *names*
+  and looked the classes up again inside the cached function — from the global
+  registry. That works for the live path but throws away the classes of any
+  mapping passed in explicitly, so a strategy declaring `MIN_CAPABILITY = (9, 0)`
+  was happily selected on sm_89. Fixed by resolving each strategy's requirement
+  *before* memoisation, so the cache key carries the requirements themselves
+  rather than names that have to be re-resolved. The test that caught it exists
+  precisely because injected mappings are how the sm_75/sm_80 paths get tested
+  without owning those cards.
+- **An ambiguous signature in the plan.** `select_strategy(key, capability=None)`
+  cannot distinguish "detect the capability" from "there is no GPU" — and rule 1
+  makes `None` mean the latter. Added an explicit auto-detect sentinel as the
+  default, so `capability=None` unambiguously forces the no-GPU path and callers
+  can force any capability for testing.
+- **A misleading reason string.** When a card had no measured block at all, the
+  explanation read "sm_75 default", implying a measurement for sm_75 that does
+  not exist. It now distinguishes "measured this card, not this shape" from
+  "never measured this card" — only the first is a performance claim.
+- Added a gate the plan does not mention: **the selected strategy must be
+  registered on this machine.** The table is generated on Person A's box; if it
+  recommends a strategy this checkout does not have, the result is an error
+  inside `forward()`. Selecting a slower strategy is always better than
+  selecting one that cannot run.
+**Verification:** `pytest -q` green — 151 passed, 2 skipped, 1 xpassed, 7.6 s.
+All five acceptance cases pass against a table generated from the synthetic
+results: exact match, nearest neighbour (log-distance, verified to pick S=2048
+over S=1024 for S=1536), capability gating (a table recommending bf16 on sm_75
+yields baseline, and the *same* table yields bf16 on sm_80), missing file to the
+hard-coded fallback, and CPU to baseline. A property test asserts every
+selection, across four capabilities and four shapes, names something present in
+the registry.
