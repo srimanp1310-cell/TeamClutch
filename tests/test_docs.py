@@ -80,8 +80,22 @@ def test_report_is_explicit_about_untested_architectures():
 def test_report_links_the_figures_it_discusses():
     body = text(REPORT)
     for figure in ("speedup_vs_seq_len", "accuracy_budget", "vram_ceiling",
-                   "roofline", "compile_baseline_survival", "gpu_busy_vs_shape"):
+                   "roofline", "compile_baseline_survival"):
         assert figure in body, f"no reference to {figure}.png"
+    # Rung 0 must point at whichever figure the platform can actually produce.
+    assert ("gpu_launch_overhead" in body) or ("gpu_busy_vs_shape" in body), (
+        "the report discusses Rung 0 but references neither the launch-overhead "
+        "figure nor the GPU-busy figure"
+    )
+
+
+def test_report_does_not_claim_an_unmeasurable_gpu_busy_number():
+    """CUPTI does not report device kernels under WSL2. If the report ever
+    quotes a busy percentage, either the platform changed or someone pasted a
+    0% reading as if it were a result."""
+    body = text(REPORT)
+    assert "unmeasurable" in body.lower()
+    assert "CUPTI" in body
 
 
 # ---------------------------------------------------------------------------

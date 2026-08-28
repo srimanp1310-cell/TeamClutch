@@ -187,8 +187,21 @@ _MASK_COMBINATIONS = ((0.0, False), (0.3, False), (0.0, True), (0.3, True))
 _ACCURACY_LAYERS = (1, 2, 4, 6)
 _ACCURACY_DTYPES = ("float32", "float16", "bfloat16")
 
+#: Long sequences at batch 1, where quadratic attention memory actually bites.
+#:
+#: The estimator says the baseline needs 2.28 GiB at S=4096 and 9.1 GiB at
+#: S=8192 (B=1, d=512, H=8, L=6, fp32) against a 6 GB card — so S=8192 is where
+#: the baseline is *expected to OOM while a fused path completes*, because a
+#: fused kernel never materializes [B, H, S, S] at all. That asymmetry is a
+#: categorical result and a stronger claim than any speedup ratio: not "ours is
+#: faster" but "ours runs where the reference cannot".
+#:
+#: Batch 1 on purpose. At B=8 the baseline already exceeds the budget at
+#: S=2048, so the interesting rows would all be SKIPPED before anything ran.
+_LONG_SEQ_LENGTHS = (2048, 4096, 8192)
+
 MATRIX_NAMES = ("default", "quick", "seq", "batch", "dmodel", "dtype", "layers",
-                "mask", "accuracy")
+                "mask", "accuracy", "long")
 
 
 def build_matrix(name: str, base: RunSpec) -> List[RunSpec]:
@@ -201,6 +214,8 @@ def build_matrix(name: str, base: RunSpec) -> List[RunSpec]:
             replace(base, padding_ratio=pad, causal=causal)
             for pad, causal in _MASK_COMBINATIONS
         ]
+    elif name == "long":
+        specs = [replace(base, batch=1, seq_len=s) for s in _LONG_SEQ_LENGTHS]
     elif name == "accuracy":
         specs = [
             replace(base, layers=layers, dtype=dtype)
@@ -233,6 +248,8 @@ def varied_axes(name: str) -> Tuple[str, ...]:
         return ("padding_ratio", "causal")
     if name == "accuracy":
         return ("layers", "dtype")
+    if name == "long":
+        return ("batch", "seq_len")
     if name == "quick":
         return ("seq_len", "dtype", "padding_ratio", "causal")
     if name == "default":

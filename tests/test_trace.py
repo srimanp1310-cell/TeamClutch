@@ -12,6 +12,7 @@ from __future__ import annotations
 import gzip
 import itertools
 import json
+import math
 import tempfile
 from pathlib import Path
 
@@ -19,9 +20,9 @@ import pandas as pd
 import pytest
 
 from analysis.trace import (
-    busy_table, gpu_active_span_us, gpu_busy_fraction, kernel_breakdown,
-    kernel_family, load_trace, merged_intervals, plot_busy_vs_shape,
-    plot_timeline,
+    busy_table, gpu_active_span_us, gpu_busy_fraction, has_kernel_track,
+    kernel_breakdown, kernel_family, launch_stats, load_trace, merged_intervals,
+    plot_busy_vs_shape, plot_launch_overhead, plot_timeline,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -107,7 +108,8 @@ def test_memcpy_is_gpu_work_but_not_a_kernel():
     frame = synthetic([("Memcpy DtoH", "gpu_memcpy", 0, 100)])
     assert not frame["is_kernel"].iloc[0]
     assert frame["is_gpu"].iloc[0]
-    assert gpu_busy_fraction(frame) == 0.0
+    # No kernel records at all -> unmeasurable, not 0%.
+    assert math.isnan(gpu_busy_fraction(frame))
     assert gpu_busy_fraction(frame, include_memory=True) == pytest.approx(1.0)
 
 
@@ -117,12 +119,64 @@ def test_gzipped_traces_load(tmp_path):
     assert gpu_busy_fraction(load_trace(path)) == pytest.approx(0.5, abs=0.01)
 
 
-def test_empty_trace_degrades_to_zero_not_a_crash():
+def test_empty_trace_degrades_without_crashing():
     frame = synthetic([])
     assert frame.empty
-    assert gpu_busy_fraction(frame) == 0.0
+    assert math.isnan(gpu_busy_fraction(frame))
     assert gpu_active_span_us(frame) == 0.0
     assert kernel_breakdown(frame).empty
+    assert not has_kernel_track(frame)
+
+
+def test_a_trace_with_no_kernel_track_is_unmeasurable_not_zero():
+    """The single most dangerous confusion in this module.
+
+    Under WSL2, CUPTI does not populate device-side kernel records, so a real
+    trace can contain the whole CPU-side story and no kernels. Reporting 0.0%
+    busy for that would read as "the GPU did nothing" — a catastrophic result —
+    when the truth is "this platform did not report it".
+    """
+    frame = synthetic([
+        ("aten::linear", "cpu_op", 0, 5000),
+        ("cudaLaunchKernel", "cuda_runtime", 10, 12),
+        ("cuLaunchKernel", "cuda_driver", 40, 9),
+    ])
+    assert not has_kernel_track(frame)
+    assert math.isnan(gpu_busy_fraction(frame)), "must be NaN, never 0.0"
+
+    # ...but the launch-side analysis still works, which is the whole point.
+    stats = launch_stats(frame, forwards=1)
+    assert stats["launches"] == 2
+    assert stats["launch_fraction"] > 0
+    assert stats["kernels_per_forward"] == 2
+
+
+def test_driver_api_launches_are_counted_too():
+    """cuBLAS submits via cuLaunchKernel, not cudaLaunchKernel, and those
+    records are not nested inside the runtime-API ones. Counting only
+    cudaLaunchKernel undercounts launches by ~40% on this workload."""
+    frame = synthetic([
+        ("cudaLaunchKernel", "cuda_runtime", 0, 10),
+        ("cudaLaunchKernel", "cuda_runtime", 20, 10),
+        ("cuLaunchKernel", "cuda_driver", 40, 10),
+    ])
+    assert launch_stats(frame)["launches"] == 3
+
+
+def test_launch_stats_on_the_real_wsl2_traces():
+    """Guards the platform assumption against a future PyTorch or driver that
+    starts populating the kernel track — at which point this test flips and we
+    should notice rather than keep quoting the fallback."""
+    real = Path(__file__).resolve().parents[1] / "logs" / "trace_small_baseline.json"
+    if not real.exists():
+        pytest.skip("no real trace committed yet")
+    frame = load_trace(real)
+    stats = launch_stats(frame)
+    assert stats["launches"] > 0
+    assert 0 < stats["launch_fraction"] < 1
+    if has_kernel_track(frame):
+        pytest.skip("this trace HAS a device kernel track — the WSL2 limitation "
+                    "no longer applies and the report's §3 needs revisiting")
 
 
 def test_a_trace_with_no_traceevents_key_raises_clearly(tmp_path):
@@ -212,14 +266,25 @@ def test_matmul_dominates_a_transformer_trace(traces):
 # the Rung 0 classification
 # ---------------------------------------------------------------------------
 
-def test_small_shapes_are_launch_bound_and_large_ones_are_not(traces):
+def test_busy_fraction_still_separates_small_from_large(traces):
     """The whole point of Rung 0: fixed launch overhead does not shrink with
     the shape, so it dominates at small shapes and vanishes at large ones."""
     table = busy_table(traces).set_index("trace")
     assert table.loc["small_baseline", "gpu_busy"] < 0.70
     assert table.loc["large_baseline", "gpu_busy"] > 0.90
-    assert table.loc["small_baseline", "verdict"] == "launch-bound"
-    assert table.loc["large_baseline", "verdict"] == "occupied"
+
+
+def test_verdict_uses_launch_arithmetic_not_the_busy_fraction(traces):
+    """The verdict must survive a platform with no device track, so it is
+    derived from launch counts — available everywhere — rather than busy %."""
+    table = busy_table(traces).set_index("trace")
+    assert set(table["verdict"]) <= {
+        "launch-bound", "borderline", "not launch-bound", "no data"
+    }
+    # The fixtures carry CPU-side launch records alongside their kernels, so the
+    # verdict is derived even though a busy fraction is also available.
+    assert (table["launches"] > 0).all()
+    assert table["launch_fraction"].notna().all()
 
 
 def test_fusing_raises_the_busy_fraction_at_every_shape(traces):
@@ -232,10 +297,16 @@ def test_fusing_raises_the_busy_fraction_at_every_shape(traces):
 
 def test_busy_table_columns(traces):
     table = busy_table(traces)
-    for column in ("trace", "gpu_busy", "span_ms", "kernels",
-                   "mean_kernel_us", "idle_ms", "verdict"):
+    for column in ("trace", "kernel_track", "gpu_busy", "launches",
+                   "launch_fraction", "mean_launch_us", "span_ms", "kernels",
+                   "mean_kernel_us", "verdict"):
         assert column in table.columns
     assert len(table) == len(traces)
+
+
+def test_launch_overhead_figure_writes_a_real_png(traces, tmp_path):
+    path = plot_launch_overhead(traces, out_dir=tmp_path)
+    assert path.stat().st_size > MIN_PNG_BYTES
 
 
 # ---------------------------------------------------------------------------

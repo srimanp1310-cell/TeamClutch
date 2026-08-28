@@ -29,7 +29,8 @@ from analysis.load import (
 )
 from analysis.roofline import RTX_4050_LAPTOP, plot_roofline, ridge_point
 from analysis.trace import (
-    busy_table, kernel_breakdown, load_trace, plot_busy_vs_shape, plot_timeline,
+    busy_table, has_kernel_track, kernel_breakdown, load_trace,
+    plot_busy_vs_shape, plot_launch_overhead, plot_timeline,
 )
 
 DEFAULT_RESULTS = "results/results.csv"
@@ -56,10 +57,25 @@ def _load_traces(logs_dir: Path) -> dict:
 
 
 def _trace_figures(traces: dict, figure_dir: Path) -> List[Path]:
-    """Busy-vs-shape, plus one timeline per shape that has both variants."""
+    """Launch overhead always; busy-% and timelines only when measurable.
+
+    The launch figure works from the CPU-side track and therefore on every
+    platform. The busy-% and timeline figures need device-side kernel records,
+    which CUPTI does not populate under WSL2 — so they are produced only when a
+    kernel track actually exists, rather than emitting an empty chart that
+    invites being read as "the GPU was idle".
+    """
     if not traces:
         return []
-    produced = [plot_busy_vs_shape(traces, out_dir=figure_dir)]
+
+    produced = [plot_launch_overhead(traces, out_dir=figure_dir)]
+
+    if not any(has_kernel_track(frame) for frame in traces.values()):
+        print("  (no device-side kernel track in any trace — CUPTI/WSL2 limit; "
+              "busy-% and timeline figures skipped)")
+        return produced
+
+    produced.append(plot_busy_vs_shape(traces, out_dir=figure_dir))
     shapes = {label.rsplit("_", 1)[0] for label in traces if "_" in label}
     for shape in sorted(shapes):
         baseline = traces.get(f"{shape}_baseline")
@@ -181,30 +197,48 @@ def _write_summary(frame, path: Path, figure_paths: Sequence[Path],
             )
 
     if traces:
+        import math as _math
+
         table = busy_table(traces).sort_values("trace")
+        any_kernel_track = bool(table["kernel_track"].any())
+
+        lines += ["", "## Rung 0 — where the time goes", ""]
+        if not any_kernel_track:
+            lines += [
+                "> **No device-side kernel records in these traces.** CUPTI does "
+                "not populate them under WSL2, so GPU-busy % is *unmeasurable* "
+                "here — not 0%. The launch-overhead columns below come from the "
+                "CPU-side track, which is complete, and are the sounder argument "
+                "anyway: launch cost is count x per-launch cost against wall "
+                "time, arithmetic that needs no device timing.",
+                "",
+            ]
         lines += [
+            "Launch share is an **upper bound** on launch-boundedness: launches "
+            "are asynchronous, so CPU time inside a launch call does not prove "
+            "the GPU was idle. Below 5% rules it out; 5-15% is undecided.",
             "",
-            "## Rung 0 — where the time goes",
-            "",
-            "GPU busy % is the fraction of the active window with a kernel "
-            "actually running. A low number means the GPU is starving between "
-            "launches: fusion and CUDA graphs pay off there, and a faster kernel "
-            "barely moves it. A high number means the kernels' own efficiency is "
-            "what is left to attack.",
-            "",
-            "| trace | GPU busy | verdict | span (ms) | idle (ms) | kernels | mean kernel (us) |",
-            "|---|---|---|---|---|---|---|",
+            "| trace | GPU busy | launches | per fwd | launch share | mean launch | span (ms) | verdict |",
+            "|---|---|---|---|---|---|---|---|",
         ]
         for _, row in table.iterrows():
+            busy = ("unmeasurable" if _math.isnan(row["gpu_busy"])
+                    else f"**{row['gpu_busy']:.1%}**")
+            per_forward = ("—" if row["kernels_per_forward"] is None
+                           else f"{row['kernels_per_forward']:.0f}")
+            share = ("—" if _math.isnan(row["launch_fraction"])
+                     else f"{row['launch_fraction']:.1%}")
+            mean_launch = ("—" if _math.isnan(row["mean_launch_us"])
+                           else f"{row['mean_launch_us']:.1f} us")
             lines.append(
-                f"| `{row['trace']}` | **{row['gpu_busy']:.1%}** | {row['verdict']} "
-                f"| {row['span_ms']:.2f} | {row['idle_ms']:.2f} | {row['kernels']} "
-                f"| {row['mean_kernel_us']:.1f} |"
+                f"| `{row['trace']}` | {busy} | {row['launches']} | {per_forward} "
+                f"| {share} | {mean_launch} | {row['span_ms']:.2f} "
+                f"| {row['verdict']} |"
             )
 
         busiest = max(traces, key=lambda label: len(traces[label]))
         breakdown = kernel_breakdown(traces[busiest], by="family", top=8)
-        if not breakdown.empty:
+        if not breakdown.empty and any_kernel_track:
             lines += [
                 "",
                 f"Kernel time by family for `{busiest}`:",
@@ -228,12 +262,20 @@ def _write_summary(frame, path: Path, figure_paths: Sequence[Path],
         f"{RTX_4050_LAPTOP.peak_bf16_tflops:g} TFLOP/s bf16, "
         f"{RTX_4050_LAPTOP.bandwidth_gbs:g} GB/s.",
         "",
-        f"- fp32 ridge point: **{ridge_point(RTX_4050_LAPTOP.peak_fp32_tflops, RTX_4050_LAPTOP.bandwidth_gbs):.1f} FLOP/byte**",
-        f"- bf16 ridge point: **{ridge_point(RTX_4050_LAPTOP.peak_bf16_tflops, RTX_4050_LAPTOP.bandwidth_gbs):.1f} FLOP/byte**",
+        f"- fp32 (TF32 on) ridge: **{ridge_point(RTX_4050_LAPTOP.peak_fp32_tflops, RTX_4050_LAPTOP.bandwidth_gbs):.1f} FLOP/byte**",
+        f"- fp32 (TF32 off) ridge: {ridge_point(RTX_4050_LAPTOP.peak_fp32_no_tf32_tflops, RTX_4050_LAPTOP.bandwidth_gbs):.1f} FLOP/byte",
+        f"- fp16 ridge: **{ridge_point(RTX_4050_LAPTOP.peak_fp16_tflops, RTX_4050_LAPTOP.bandwidth_gbs):.1f} FLOP/byte**",
+        f"- bf16 ridge: **{ridge_point(RTX_4050_LAPTOP.peak_bf16_tflops, RTX_4050_LAPTOP.bandwidth_gbs):.1f} FLOP/byte**",
         "",
-        "_Peak figures are placeholders until Person A confirms them from the "
-        "spec sheet (docs/APPROVALS_NEEDED.md §1.4). Every ridge point scales "
-        "directly with them._",
+        "_Measured on the card with a 4096x4096 matmul and a 512 MB "
+        "device-to-device copy, not taken from the spec sheet: this is a low-TGP "
+        "part and the real figures are roughly half the published ones._",
+        "",
+        "**The ridge point moves right as precision drops.** Reduced precision "
+        "raises the compute roof and leaves the bandwidth roof where it is, so a "
+        "workload that was compute-bound in fp32 can become *memory-bound* in "
+        "bf16 — the same kernel does not simply move up, it can cross to the "
+        "other side of the ridge and change which optimization comes next.",
         "",
         "## Figures",
         "",

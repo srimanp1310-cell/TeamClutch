@@ -99,25 +99,33 @@ one we had.
 
 | | |
 |---|---|
-| CPU | `<FILL A: model, cores>` |
-| GPU | `<FILL A: model>` — compute capability `<FILL A: sm_XX>` |
-| VRAM | `<FILL A: GB>` |
-| Driver / CUDA | `<FILL A: driver version, CUDA version>` |
-| OS | `<FILL A: WSL2 version, distro>` |
-| PyTorch | `<FILL A: version and build (cu124?)>` |
-| Triton | `<FILL A: version, or "not used">` |
-| Disk | `<FILL A: type>` |
+| CPU | Intel Core i7-12650HX (12th gen) |
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU — compute capability sm_89 (Ada Lovelace), **low-TGP** |
+| VRAM | 6.0 GB GDDR6 |
+| OS | Windows 11 + WSL2, Ubuntu 24.04 |
+| PyTorch | 2.6.0+cu124 |
+| Triton | 3.2.0 |
+| Install | `pip install torch --index-url https://download.pytorch.org/whl/cu124` |
 
-Peak figures used for the roofline in §6:
+Peak figures used for the roofline in §6. These are **measured on the card**,
+not taken from the spec sheet — with a 4096×4096 matmul and a 512 MB
+device-to-device copy:
 
-| | value | source |
+| | measured | note |
 |---|---|---|
-| fp32 peak | `<FILL A: TFLOP/s>` (placeholder 12.0) | spec sheet |
-| bf16 tensor-core peak | `<FILL A: TFLOP/s>` (placeholder 48.0) | spec sheet |
-| memory bandwidth | `<FILL A: GB/s>` (placeholder 192) | spec sheet |
+| fp32, TF32 **on** | **11.0 TFLOP/s** | the benchmark defaults to `--allow-tf32`, so this is the fp32 number that applies |
+| fp32, TF32 off | 5.7 TFLOP/s | for contrast; nearly halves the ridge point |
+| fp16 tensor | 22.5 TFLOP/s | |
+| bf16 tensor | 23.2 TFLOP/s | |
+| memory bandwidth | **174.8 GB/s** | 91% of the 192 GB/s theoretical |
 
-Every ridge point in this report scales directly with these three numbers, so
-they are stated rather than assumed.
+Measuring rather than quoting the spec sheet was not pedantry: this is a low-TGP
+part and the achieved figures are roughly **half** the published ones. A
+spec-sheet roofline would place every operating point at half its true height
+against the roof, and would have told us we were leaving twice as much on the
+table as we actually were.
+
+Every ridge point in this report scales directly with these numbers.
 
 A second machine — macOS on Apple Silicon, CPU only — runs the correctness
 suite, the analysis and every figure. Nothing in this report's *measurements*
@@ -150,22 +158,64 @@ overridden (in which case the row is tagged `dirty`).
 Before optimizing anything we profiled the baseline at three shapes and measured
 what fraction of the wall-clock window the GPU spent with a kernel running.
 
-`<FILL B: paste the GPU-busy table from results/summary.md §"Rung 0">`
+### 3.1 A measurement we could not take, and what we used instead
 
-![GPU busy fraction by shape](../results/figures/gpu_busy_vs_shape.png)
+The intended metric was GPU busy % — the fraction of the wall-clock window with
+a kernel actually running. **It is not available on this platform.** Under WSL2,
+CUPTI does not populate device-side kernel completion records: the Chrome traces
+contain the complete CPU-side story (`cpu_op`, `cuda_runtime`, `cuda_driver`,
+flow arrows) and *zero* kernel events. Verified on the traces in `logs/`, not
+assumed.
 
-![Kernel timeline](../results/figures/trace_timeline_small.png)
+This is worth dwelling on because of how the failure presents. A naive parser
+finds no kernels, sums zero busy time, and reports **0.0% GPU busy** — which
+reads as the most catastrophic result imaginable rather than as a missing
+measurement. Our analysis returns `NaN` and the word "unmeasurable" instead, and
+a test asserts it never returns 0.0 for a trace with no kernel track.
 
-**Reading it:** white space in the timeline is a GPU doing nothing. Launch
-overhead is roughly fixed per kernel and does not shrink with the shape, so it
-dominates at small shapes and vanishes at large ones.
+The fallback is *launch arithmetic*, which needs no device timing: count the
+kernel launches on the CPU side, multiply by their measured cost, compare to
+wall time. It is the sounder argument anyway, for a reason specific to this
+benchmark: `cuda.Event` pairs are enqueued **on the stream**, so a CPU-side
+stall falls inside the measurement window and busy % reads near 100% almost
+regardless of what the GPU was doing.
 
-`<FILL B: one sentence per shape classifying it — launch-bound / bandwidth-bound
-/ compute-bound — and what that implied for which rung we did first.>`
+### 3.2 Launch overhead, measured
 
-Kernel time by family:
+Baseline, fp32 with TF32 on, 6 layers, no causal, no padding:
 
-`<FILL B: paste the kernel-family breakdown from results/summary.md>`
+| shape | launches | launch share of wall time | mean launch | verdict |
+|---|---|---|---|---|
+| small (B=8, S=128) | 345 | **8.2%** | 15.5 µs | borderline |
+| medium (B=8, S=512) | 345 | 2.9% | 11.6 µs | not launch-bound |
+| large (B=4, S=2048) | 345 | 1.3% | 19.7 µs | not launch-bound |
+
+![Launch overhead by shape](../results/figures/gpu_launch_overhead.png)
+
+Two corrections to a first pass at these numbers, both of which moved the
+answer:
+
+1. **Driver-API launches were being missed.** cuBLAS submits through
+   `cuLaunchKernel`, not `cudaLaunchKernel`, and those records are *not* nested
+   inside the runtime-API ones — we checked. Counting only `cudaLaunchKernel`
+   gives 67 launches per forward; including the driver path gives **115**, a 42%
+   undercount.
+2. **Per-launch cost is measured, not assumed.** The mean is 15.5 µs at the
+   small shape, not the ~5 µs a back-of-envelope estimate would use.
+
+Together those take the small shape's launch share from ~2.5% to **8.2%** — the
+difference between "definitively not launch-bound" and "borderline".
+
+**Reading it honestly:** launch share is an *upper bound*. Launches are
+asynchronous, so CPU time inside a launch call does not prove the GPU was idle —
+the CPU may simply be running ahead. Below 5% rules launch-boundedness out; 5–15%
+leaves it open. So: the medium and large shapes are definitively not
+launch-bound, and the small shape is undecided by this evidence.
+
+**What that implied:** fusion before CUDA graphs. At the shapes where the
+speedup matters most, there is no launch overhead worth eliminating, so
+kernel-level work is where the return is. CUDA graphs stay on the list for the
+small shape only, and only if it becomes the binding case.
 
 ---
 
@@ -174,6 +224,33 @@ Kernel time by family:
 One subsection per rung. Each states the hypothesis *before* the measurement,
 the measured before/after, and the surprise — because the surprises are the part
 worth reading.
+
+### Rung 0.5 — a baseline that was wrong before we optimized anything
+
+Not an optimization, but the most instructive measurement of the project.
+
+The first profiling run reported 18.6 / 64.6 / 215.2 ms across the three shapes,
+with **115** kernels per forward. Those numbers were wrong. The standalone
+profiling script never set `matmul_precision="high"` or `allow_tf32=True`, both
+of which the organizers' `main()` sets by default — so it was running fp32
+matmuls at 5.7 TFLOP/s while `sweep.py` ran the same code at 11.0. We had two
+contradictory baselines and, for a while, no idea which was real.
+
+After matching the organizers' global state: **13.5 / 52.1 / 176.5 ms**, and the
+kernel count dropped to 67 runtime-API launches per forward. 18–27% faster, 42%
+fewer kernels.
+
+The kernel-count drop is the interesting part. TF32 is a *math mode*, not a
+storage format — the naive expectation is that the same kernels run faster.
+Instead PyTorch selected entirely different, tensor-core kernels. A flag that
+looks like a precision knob is really a kernel-selection knob.
+
+Two things this justifies. First, the harness sets global state exactly as the
+organizers' `main()` does, and that is not optional bookkeeping — it is worth
+18–27% and would have contaminated every subsequent comparison. Second, a
+baseline is a measurement like any other and can be wrong; ours was, and it was
+caught by two tools disagreeing rather than by either one looking suspicious on
+its own.
 
 ### Rung 1 — `<FILL A: name, e.g. scaled_dot_product_attention>`
 
@@ -306,12 +383,25 @@ modelled, so this *overestimates* bytes and therefore *underestimates*
 arithmetic intensity: points sit slightly left of the truth, which errs toward
 calling ourselves more bandwidth-bound rather than less.
 
-Ridge points for this card:
+Ridge points for this card, from the measured peaks in §2:
 
-| precision | peak | ridge point |
+| precision | measured peak | ridge point |
 |---|---|---|
-| fp32 | `<FILL A>` (12.0 placeholder) | **62.5 FLOP/byte** |
-| bf16 | `<FILL A>` (48.0 placeholder) | **250 FLOP/byte** |
+| fp32, TF32 on | 11.0 TFLOP/s | **62.9 FLOP/byte** |
+| fp32, TF32 off | 5.7 TFLOP/s | 32.6 FLOP/byte |
+| fp16 | 22.5 TFLOP/s | **128.7 FLOP/byte** |
+| bf16 | 23.2 TFLOP/s | **132.7 FLOP/byte** |
+
+**The ridge point moves with precision, and it moves right.** Reduced precision
+raises the compute roof and does nothing at all for the bandwidth roof, so the
+crossover shifts from 63 to ~130 FLOP/byte. The consequence is counterintuitive
+and worth stating plainly: **switching to reduced precision can make a workload
+*more* memory-bound, not less.** A kernel that was comfortably compute-bound in
+fp32 can cross to the other side of the ridge in fp16 — it does not simply move
+up the chart, and the right next optimization changes with it.
+
+This is why the roofline figure draws one ceiling per dtype rather than one for
+the chart.
 
 ![Roofline](../results/figures/roofline.png)
 
@@ -320,7 +410,9 @@ close the best strategy gets to its roof.>`
 
 The prediction from §1.1 is testable here: the baseline should walk *left* along
 the x-axis as S grows, crossing the fp32 ridge near S=1024, while the fused path
-walks right. `<FILL B: does it?>`
+walks right. The measured fp32 ridge (62.9 FLOP/byte) is within half a percent
+of the placeholder the prediction was made against (62.5), so the prediction
+stands as recorded. `<FILL B: does the measured data follow it?>`
 
 ---
 
@@ -345,6 +437,57 @@ Two properties of the reference implementation drive the numbers:
 2. **Masking is applied in four places** — invalid key positions inside
    attention, and invalid query positions after attention, after each block and
    after the final norm. Any of them missed shows up only in the padded branch.
+
+### 7.1 bf16 cannot pass against this reference, and that is a property of the benchmark
+
+The most interesting accuracy result is a negative one, and it is not about our
+implementation.
+
+The SDPA strategy passes at fp32 and fp16 and **fails at bf16**. The failure is
+not a bug. Its worst element is exactly **2 ULP of bf16**: an absolute error of
+0.03125 at magnitude 2.17, where 1 ULP at that magnitude is 0.015625. That is
+**1.44% relative**, against a 1% tolerance. Mean absolute error across the
+tensor is 0.0009 — about 0.06 ULP — so roughly 95% of elements match the
+reference *exactly*; only a small fraction drift by two representable steps. But
+the oracle is per element, so a small fraction is enough.
+
+The same code path in fp16 has 10 mantissa bits instead of 7. Two ULP there is
+0.0039, or **0.18% relative** — comfortably inside tolerance. Identical
+algorithm, identical kernel, opposite verdict, decided entirely by the width of
+the mantissa.
+
+**Where the two steps come from.** The reference rounds the softmax
+probabilities to bf16 *before* the PV matmul; SDPA keeps them in fp32
+internally. Our path is therefore **more** accurate than the reference — it just
+does not reproduce the reference's intermediate rounding.
+
+**Why this is a statement about the benchmark.** At magnitude 2.17, `rtol =
+0.01` is 1.39 ULP of bf16 — *tighter than the format's own granularity*. Any
+implementation that reorders the computation, or declines to round at the same
+intermediate points, will land two representable steps away somewhere in a
+tensor of two million elements. Two steps is already over budget. So at
+`rtol = 0.01` the only bf16 implementation that can pass is one that reproduces
+the reference's operation order bit-for-bit — which is precisely what an
+optimized kernel must not do.
+
+At the problem statement's own looser bar (`rel < 0.02`) this passes with room
+to spare. The gap between the two published tolerances is the difference between
+bf16 being shippable and not.
+
+**What we did about it.** The strategy declares
+`SUPPORTED_DTYPES = (torch.float32, torch.float16)`. That declaration is
+honoured in two places at once: the test matrix skips bf16 with a visible
+reason, and `src/dispatch.py` will never select the strategy for a bf16 tensor —
+falling through to the next allowed candidate and ultimately to `baseline`. An
+unsupported dtype is therefore both untested *and unreachable*, which is the
+only combination that is safe. Declaring a dtype unsupported is not a way to
+hide a failure.
+
+**The cost.** We ship fp16 rather than bf16 and give up about 3% of peak
+throughput (22.5 vs 23.2 TFLOP/s measured). This reverses an earlier judgement
+of ours that bf16 was the better target — it is faster on this card and it is
+the numerically more robust format in general, but it cannot clear this
+benchmark's bar, and correctness is not negotiable against 3%.
 
 The correctness suite crosses every registered strategy against three shapes
 (including `S=33`, `d=96`, `heads=3` — non-power-of-two on both axes), padding
@@ -464,7 +607,18 @@ Stated plainly, because a report that claims no limitations is not credible.
 6. **The dispatch table is only as dense as the sweep.** Unmeasured shapes fall
    through to a nearest neighbour, which is a guess — a well-founded one, but
    still a guess.
-7. `<FILL A: anything you hit and worked around.>`
+7. **No device-side kernel attribution.** CUPTI does not populate kernel
+   completion records under WSL2, so GPU busy % and per-kernel time breakdowns
+   are unavailable on this setup (§3.1). `cuda.Event` timing is unaffected, so
+   every latency and speedup number is sound; what is lost is the ability to say
+   *which kernel* owned the time. The launch-count argument substitutes for the
+   launch-bound question, but a per-kernel breakdown would have been better
+   evidence and we do not have it.
+8. **bf16 is not shippable against this reference at `rtol = 0.01`** (§7.1), so
+   every reduced-precision number here is fp16. That is a constraint imposed by
+   the benchmark's tolerance, not a limit of the hardware — the card is
+   marginally faster in bf16.
+9. `<FILL A: anything else you hit and worked around.>`
 
 ### 11.1 Negative results
 

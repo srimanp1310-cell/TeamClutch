@@ -152,10 +152,18 @@ def test_matrix_quick_varies_only_seq_len(tmp_path):
 @pytest.mark.parametrize(
     "name,expected",
     [("seq", 4), ("batch", 3), ("dmodel", 3), ("dtype", 3), ("layers", 4),
-     ("mask", 4), ("quick", 2)],
+     ("mask", 4), ("quick", 2), ("accuracy", 12), ("long", 3)],
 )
 def test_matrix_sizes(name, expected):
     assert len(sweep.build_matrix(name, sweep.RunSpec())) == expected
+
+
+def test_long_matrix_targets_the_vram_ceiling():
+    """Batch 1, because at B=8 the baseline exceeds the memory budget at
+    S=2048 and every interesting row would be SKIPPED before it ran."""
+    specs = sweep.build_matrix("long", sweep.RunSpec())
+    assert [s.seq_len for s in specs] == [2048, 4096, 8192]
+    assert all(s.batch == 1 for s in specs)
 
 
 def test_default_matrix_is_deduplicated():

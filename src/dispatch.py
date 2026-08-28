@@ -20,11 +20,18 @@ Selection order
 4. The table's overall default.
 5. `"baseline"`, which is always registered and always correct.
 
-Every step is filtered by two gates that can only remove candidates, never add
-them: the strategy must be **registered** on this machine, and it must be
-**supported by this GPU's capability**. Selecting a strategy that is not
-registered, or that needs hardware this card does not have, is worse than
-selecting a slower one — it turns a performance decision into a crash.
+Every step is filtered by three gates that can only remove candidates, never add
+them. The strategy must be **registered** on this machine, **supported by this
+GPU's capability**, and **numerically correct in the requested dtype**.
+
+The third gate is the subtle one. A strategy can be perfectly implemented, fast,
+and still unable to meet the tolerance in a given precision — bf16 against this
+reference is the worked example (see `docs/INTERFACE.md` §5.1). Such a strategy
+declares `SUPPORTED_DTYPES`, and dispatch will never hand it an input it cannot
+compute correctly. Without this gate the hard-coded fallback would happily
+select a fp32/fp16-only strategy for a bf16 tensor and return quietly wrong
+numbers, which is the worst failure mode available: not a crash, not a slowdown,
+but a plausible wrong answer.
 
 Cost
 ----
@@ -192,6 +199,19 @@ def clear_caches() -> None:
 # gates
 # ---------------------------------------------------------------------------
 
+def _supported_dtypes(name: str, cls: Optional[type]) -> Optional[frozenset]:
+    """Dtypes this strategy claims to be correct in, or None for "all".
+
+    Only a class can declare this. A name appearing in the JSON table with no
+    class behind it on this machine is already excluded by the registration
+    gate, so there is nothing to guess.
+    """
+    declared = getattr(cls, "SUPPORTED_DTYPES", None)
+    if declared is None:
+        return None
+    return frozenset(str(d).replace("torch.", "") for d in declared)
+
+
 def _minimum_capability(name: str, cls: Optional[type]) -> Optional[Tuple[int, int]]:
     """What this strategy needs. A class declaration beats the name heuristic.
 
@@ -211,25 +231,37 @@ def _minimum_capability(name: str, cls: Optional[type]) -> Optional[Tuple[int, i
     return max(needed) if needed else None
 
 
-#: (name, minimum capability or None) for everything runnable here. Resolved
-#: before memoisation so the cache key carries the requirements themselves
-#: rather than names that would have to be looked up again — looking them up
-#: again in the global registry silently drops the requirements of any strategy
-#: passed in explicitly, which is exactly the bug this shape prevents.
-Requirements = Tuple[Tuple[str, Optional[Tuple[int, int]]], ...]
+#: (name, minimum capability or None, supported dtypes or None) for everything
+#: runnable here. Resolved before memoisation so the cache key carries the
+#: requirements themselves rather than names that would have to be looked up
+#: again — looking them up again in the global registry silently drops the
+#: requirements of any strategy passed in explicitly, which is exactly the bug
+#: this shape prevents.
+Requirements = Tuple[Tuple[str, Optional[Tuple[int, int]], Optional[frozenset]], ...]
 
 
 def _requirements(available: Mapping[str, type]) -> Requirements:
     return tuple(sorted(
-        (name, _minimum_capability(name, cls)) for name, cls in available.items()
+        (name, _minimum_capability(name, cls), _supported_dtypes(name, cls))
+        for name, cls in available.items()
     ))
 
 
-def _is_allowed(name: str, capability: Tuple[int, int], requirements: Requirements) -> bool:
-    """Registered here, and supported by this card."""
-    for candidate, required in requirements:
-        if candidate == name:
-            return required is None or capability >= required
+def _is_allowed(
+    name: str,
+    capability: Tuple[int, int],
+    requirements: Requirements,
+    dtype: Optional[str] = None,
+) -> bool:
+    """Registered here, supported by this card, and correct in this dtype."""
+    for candidate, required, dtypes in requirements:
+        if candidate != name:
+            continue
+        if required is not None and capability < required:
+            return False
+        if dtype is not None and dtypes is not None and dtype not in dtypes:
+            return False
+        return True
     return False
 
 
@@ -315,13 +347,15 @@ def _decide(
     entries = raw_block if isinstance(raw_block, dict) else {}
 
     def gated(name: Optional[str]) -> bool:
-        return bool(name) and _is_allowed(str(name), capability, requirements)
+        return bool(name) and _is_allowed(
+            str(name), capability, requirements, key.dtype
+        )
 
     # 3. exact match
     exact = entries.get(key.table_key())
     if gated(exact):
         return Decision(str(exact), f"exact match {block_name} {key.table_key()} -> {exact}")
-    rejected = f" (measured {exact!r} rejected here)" if exact else ""
+    rejected = f" (measured {exact!r} rejected: {_why_rejected(str(exact), capability, requirements, key.dtype)})" if exact else ""
 
     # 4. nearest measured neighbour
     neighbour = _nearest(key, {k: v for k, v in entries.items() if gated(v)})
@@ -351,6 +385,21 @@ def _decide(
         "baseline",
         f"nothing applicable for {block_name} {key.table_key()} -> baseline{rejected}",
     )
+
+
+def _why_rejected(
+    name: str, capability: Tuple[int, int], requirements: Requirements, dtype: str
+) -> str:
+    """Which gate removed this candidate. "Rejected" alone is not actionable."""
+    for candidate, required, dtypes in requirements:
+        if candidate != name:
+            continue
+        if required is not None and capability < required:
+            return f"needs sm_{required[0]}{required[1]}+, this card is {capability_name(capability)}"
+        if dtypes is not None and dtype not in dtypes:
+            return f"does not support {dtype} (declares {sorted(dtypes)})"
+        return "allowed"
+    return "not registered on this machine"
 
 
 @functools.lru_cache(maxsize=512)

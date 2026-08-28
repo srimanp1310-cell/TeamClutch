@@ -15,6 +15,14 @@ Every strategy:
     and build the fused view in `__init__` / lazily — never rename them;
   * sets `REQUIRES_CUDA = True` if it cannot run on CPU (Triton, CUDA kernels).
     `tests/test_strategies.py` then SKIPs it on the Mac instead of failing.
+  * sets `SUPPORTED_DTYPES` if it is only numerically correct in some dtypes,
+    e.g. `SUPPORTED_DTYPES = (torch.float32, torch.float16)`. A strategy may be
+    perfectly implemented and still fail the tolerance in a given precision --
+    see `docs/INTERFACE.md` on why bf16 cannot match this reference at
+    `rtol = 0.01`. Declaring it is not an excuse: it removes the dtype from the
+    test matrix *and* stops the dispatcher ever selecting the strategy for it,
+    so an unsupported dtype can never reach production and be silently wrong.
+  * sets `MIN_CAPABILITY` if it needs particular hardware, e.g. `(8, 0)`.
 
 Person A registers a strategy like this::
 
@@ -39,6 +47,7 @@ import importlib
 import pkgutil
 from typing import Dict, Type
 
+import torch
 import torch.nn as nn
 
 from src.baseline import BaselineTransformer
@@ -46,12 +55,19 @@ from src.baseline import BaselineTransformer
 __all__ = [
     "STRATEGIES",
     "UNAVAILABLE",
+    "ALL_DTYPES",
     "BaselineCopy",
     "register",
     "get_strategy",
     "available_strategies",
     "requires_cuda",
+    "supported_dtypes",
+    "supports_dtype",
 ]
+
+#: The three dtypes the organizers' script accepts. A strategy that does not
+#: declare `SUPPORTED_DTYPES` is assumed to handle all of them.
+ALL_DTYPES: frozenset = frozenset({"float32", "float16", "bfloat16"})
 
 
 class BaselineCopy(BaselineTransformer):
@@ -113,6 +129,31 @@ def get_strategy(name: str) -> Type[nn.Module]:
 def requires_cuda(name: str) -> bool:
     """True if this strategy declares it cannot run on CPU."""
     return bool(getattr(get_strategy(name), "REQUIRES_CUDA", False))
+
+
+def dtype_name(dtype) -> str:
+    """`torch.float16` or `"float16"` -> `"float16"`."""
+    if isinstance(dtype, torch.dtype):
+        return str(dtype).replace("torch.", "")
+    return str(dtype).replace("torch.", "")
+
+
+def supported_dtypes(name_or_class) -> frozenset:
+    """Dtypes this strategy is numerically correct in, as names.
+
+    Undeclared means all three. Declaring a subset is a statement that the
+    strategy is *wrong* in the others -- not slow, wrong -- so both the test
+    matrix and the dispatcher must honour it.
+    """
+    cls = name_or_class if isinstance(name_or_class, type) else get_strategy(name_or_class)
+    declared = getattr(cls, "SUPPORTED_DTYPES", None)
+    if declared is None:
+        return ALL_DTYPES
+    return frozenset(dtype_name(d) for d in declared)
+
+
+def supports_dtype(name_or_class, dtype) -> bool:
+    return dtype_name(dtype) in supported_dtypes(name_or_class)
 
 
 def available_strategies(cuda_available: bool) -> Dict[str, Type[nn.Module]]:

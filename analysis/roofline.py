@@ -37,18 +37,35 @@ __all__ = [
 
 @dataclass(frozen=True)
 class MachineSpec:
-    """Peak numbers for one GPU. Person A confirms these from the spec sheet.
+    """Achieved peak numbers for one GPU.
 
-    Defaults describe the RTX 4050 Laptop (sm_89) the measurements come from.
-    They are *placeholders until confirmed* — see docs/APPROVALS_NEEDED.md — and
-    every ridge point in the report scales directly with them, so a wrong value
-    here is a wrong conclusion, not a cosmetic error.
+    These are **measured**, not spec-sheet figures: microbenchmarked on the
+    actual card with a 4096x4096 matmul and a 512 MB device-to-device copy. That
+    matters here — this is a low-TGP RTX 4050 Laptop and the real numbers are
+    roughly half the published ones, so a spec-sheet roofline would put every
+    operating point at half its true height against the roof.
+
+    `peak_fp32_tflops` is the **TF32-on** number, because the organizers'
+    benchmark defaults to `--allow-tf32` and `matmul_precision="high"`. TF32-off
+    fp32 is recorded separately: it is 5.7 TFLOP/s, which nearly halves the
+    ridge point, and quoting the wrong one silently mislabels every fp32 config
+    as compute-bound or memory-bound.
     """
 
-    name: str = "RTX 4050 Laptop (sm_89)"
-    peak_fp32_tflops: float = 12.0
-    peak_bf16_tflops: float = 48.0
-    bandwidth_gbs: float = 192.0
+    name: str = "RTX 4050 Laptop (sm_89, low-TGP)"
+    peak_fp32_tflops: float = 11.0        # TF32 on — the benchmark's default
+    peak_fp32_no_tf32_tflops: float = 5.7  # TF32 off, for contrast
+    peak_fp16_tflops: float = 22.5
+    peak_bf16_tflops: float = 23.2
+    bandwidth_gbs: float = 174.8          # 91% of the 192 GB/s theoretical
+
+    def peak_for(self, dtype: str) -> float:
+        """Peak throughput for a dtype. Each has its own roof and own ridge."""
+        return {
+            "float16": self.peak_fp16_tflops,
+            "half": self.peak_fp16_tflops,
+            "bfloat16": self.peak_bf16_tflops,
+        }.get(str(dtype), self.peak_fp32_tflops)
 
 
 RTX_4050_LAPTOP = MachineSpec()
@@ -186,7 +203,18 @@ def plot_roofline(
     machine: MachineSpec = RTX_4050_LAPTOP,
     filename: str = "roofline.png",
 ) -> Path:
-    """Log-log roofline: two roofs, both ridge points, one point per measurement.
+    """Log-log roofline: one roof and one ridge *per dtype*, points measured.
+
+    One ceiling per precision, not one for the chart. Reduced precision raises
+    the compute roof and leaves the bandwidth roof exactly where it was, so the
+    ridge point moves *right*: fp32 (TF32) 62.9, fp16 128.7, bf16 132.7
+    FLOP/byte on this card.
+
+    The consequence is counterintuitive and worth stating plainly: switching to
+    bf16 roughly doubles available compute and does nothing for bandwidth, so a
+    workload that was compute-bound in fp32 can become **memory-bound** in bf16.
+    The same kernel does not simply move up; it can move to the other side of
+    the ridge and change which optimization is the right next one.
 
     Colour encodes dtype and *shape* encodes strategy. That split is deliberate:
     a scatter puts every colour pair on screen simultaneously, and only the
@@ -213,24 +241,27 @@ def plot_roofline(
     intensity = data["intensity"]
     x = _log_span(intensity.min(), intensity.max())
 
-    # --- the roofs ---------------------------------------------------------
-    for peak, label, style in (
-        (machine.peak_bf16_tflops, f"bf16 tensor core peak {machine.peak_bf16_tflops:g} TFLOP/s", ":"),
-        (machine.peak_fp32_tflops, f"fp32 peak {machine.peak_fp32_tflops:g} TFLOP/s", "-"),
-    ):
-        roof = [min(peak, machine.bandwidth_gbs * 1e9 * xi / 1e12) for xi in x]
-        ax.plot(x, roof, style, color=INK["secondary"], linewidth=1.4,
-                label=label, zorder=1)
+    # --- one roof per dtype, each with its own ridge ------------------------
+    dtypes_present = sorted(data["dtype"].dropna().unique())
+    roofs = [
+        (dtype, machine.peak_for(str(dtype)))
+        for dtype in dtypes_present
+    ] or [("float32", machine.peak_fp32_tflops)]
 
-    for peak, colour in ((machine.peak_fp32_tflops, INK["secondary"]),
-                         (machine.peak_bf16_tflops, INK["muted"])):
+    for index, (dtype, peak) in enumerate(roofs):
+        roof = [min(peak, machine.bandwidth_gbs * 1e9 * xi / 1e12) for xi in x]
+        style = ("-", "--", ":")[index % 3]
+        ax.plot(x, roof, style, color=INK["secondary"], linewidth=1.3,
+                label=f"{dtype} roof — {peak:g} TFLOP/s", zorder=1)
+
         ridge = ridge_point(peak, machine.bandwidth_gbs)
         if x[0] <= ridge <= x[-1]:
-            ax.plot([ridge], [peak], marker="|", color=colour, markersize=9, zorder=2)
+            ax.plot([ridge], [peak], marker="|", color=INK["secondary"],
+                    markersize=9, zorder=2)
             ax.annotate(
-                f"ridge {ridge:.0f} FLOP/byte",
-                xy=(ridge, peak), xytext=(4, -12), textcoords="offset points",
-                fontsize=8, color=colour,
+                f"{ridge:.0f}",
+                xy=(ridge, peak), xytext=(3, -11), textcoords="offset points",
+                fontsize=8, color=INK["secondary"],
             )
 
     # --- the measurements --------------------------------------------------
@@ -275,7 +306,9 @@ def plot_roofline(
                        title="strategy", title_fontsize=8)
     second.get_title().set_color(INK["secondary"])
 
-    finish(fig, ax, "Roofline", f"{machine.name} · {machine.bandwidth_gbs:g} GB/s")
+    finish(fig, ax, "Roofline",
+           f"{machine.name} · {machine.bandwidth_gbs:g} GB/s measured · "
+           "ridge point (FLOP/byte) marked per dtype")
     fig.savefig(path)
     import matplotlib.pyplot as plt
     plt.close(fig)

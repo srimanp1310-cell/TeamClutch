@@ -206,6 +206,53 @@ abs(user - ref) <= atol   OR   abs(user - ref) <= rtol * abs(ref)
 Passing at 0.001/0.01 passes at 0.002/0.02 with margin to spare, and the margin
 is a number worth putting in the report.
 
+### 5.1 Declaring a dtype unsupported — `SUPPORTED_DTYPES`
+
+A strategy may be correctly implemented, fast, and still unable to meet the
+tolerance in a given precision. It declares that:
+
+```python
+@register("sdpa")
+class SdpaTransformer(BaselineTransformer):
+    SUPPORTED_DTYPES = (torch.float32, torch.float16)   # bf16 cannot pass — see below
+```
+
+This is not a way to hide a bug. The declaration is honoured in **two** places
+at once, so an unsupported dtype becomes both untested and unreachable:
+
+- `tests/test_strategies.py` skips that dtype with a visible reason;
+- `src/dispatch.py` will never select the strategy for it, falling through to
+  the next allowed candidate and ultimately to `baseline`.
+
+Undeclared means all three dtypes. Every strategy must support `float32` — that
+is the dtype the CPU accuracy oracle runs in, and a test enforces it.
+
+**The worked example: bf16 against this reference.** Measured on the SDPA
+strategy at sm_89, the worst element is exactly **2 ULP of bf16** — an absolute
+error of 0.03125 at magnitude 2.17, where 1 ULP is 0.015625. That is 1.44%
+relative, against a 1% tolerance. The same code path in fp16 has 10 mantissa
+bits instead of 7, so 2 ULP is 0.18% — comfortably inside, which is why fp16
+passes and bf16 does not.
+
+The cause is not an error in either implementation. The reference rounds the
+softmax probabilities to bf16 *before* the PV matmul; SDPA keeps them in fp32
+internally. The optimized path is **more** accurate — it simply does not
+reproduce the reference's intermediate rounding.
+
+That makes this a property of the benchmark rather than of any implementation.
+`rtol = 0.01` at that magnitude is 1.39 ULP of bf16: **tighter than the format's
+own granularity**. Any implementation that reorders or refuses the reference's
+exact intermediate rounding will land two representable steps away somewhere,
+and two steps is already over budget. Only an implementation that reproduces the
+reference's operation order bit-for-bit can pass — which is precisely what an
+optimized kernel must not do. At the problem statement PDF's looser
+`rtol < 0.02` it would pass with room to spare.
+
+Mean absolute error is 0.0009 (~0.06 ULP), so around 95% of elements match
+exactly; only a small fraction drift by two steps. That is what "unshippable"
+means here — not that the numbers are bad, but that a single element outside
+budget fails the run.
+
 ---
 
 ## 6. Smoke test (runs anywhere, ~1 s, no GPU)

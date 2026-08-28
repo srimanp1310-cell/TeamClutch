@@ -131,9 +131,7 @@ def baseline_ms_for(config: dict, rng: random.Random) -> float:
     [B,H,S,S], so at long sequences it is bandwidth-bound and achieves a smaller
     fraction of peak. That is the shape the roofline is supposed to reveal.
     """
-    peak = (RTX_4050_LAPTOP.peak_bf16_tflops
-            if config["dtype"] in ("float16", "bfloat16")
-            else RTX_4050_LAPTOP.peak_fp32_tflops)
+    peak = RTX_4050_LAPTOP.peak_for(config["dtype"])
     efficiency = {128: 0.44, 512: 0.36, 1024: 0.29, 2048: 0.22}.get(config["seq_len"], 0.34)
     achieved = peak * efficiency * rng.uniform(0.94, 1.06)
     flops = forward_flops({**config, "ffn_dim": 4 * config["d_model"]})

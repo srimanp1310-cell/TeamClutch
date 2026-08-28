@@ -38,7 +38,9 @@ from src.baseline import (
     generate_random_case,
     resolve_dtype,
 )
-from src.strategies import STRATEGIES, get_strategy, requires_cuda
+from src.strategies import (
+    STRATEGIES, get_strategy, requires_cuda, supported_dtypes, supports_dtype,
+)
 
 # The tolerance we target: the torch script's defaults, which are stricter than
 # the problem statement PDF's 0.002 / 0.02.
@@ -160,6 +162,24 @@ def skip_if_cuda_only(strategy_name: str) -> None:
         )
 
 
+def skip_if_dtype_unsupported(strategy_name: str, dtype_name: str) -> None:
+    """Honour a strategy's `SUPPORTED_DTYPES` declaration.
+
+    A strategy may be correctly implemented and still be unable to meet the
+    tolerance in a given precision — bf16 against this reference is the worked
+    example (docs/INTERFACE.md §5.1). Declaring the dtype unsupported is not a
+    way to hide a bug: `src/dispatch.py` reads the same declaration and will
+    never select the strategy for that dtype, so the untested path is also
+    unreachable in production.
+    """
+    if not supports_dtype(strategy_name, dtype_name):
+        pytest.skip(
+            f"{strategy_name} declares SUPPORTED_DTYPES = "
+            f"{sorted(supported_dtypes(strategy_name))} and does not claim "
+            f"{dtype_name}; dispatch will never select it for that dtype"
+        )
+
+
 # ---------------------------------------------------------------------------
 # the main matrix: strategy x shape x padding x causal, float32
 # ---------------------------------------------------------------------------
@@ -262,6 +282,7 @@ def test_deeper_stack_accumulates_no_extra_error(strategy_name):
 @pytest.mark.parametrize("strategy_name", STRATEGY_NAMES)
 @pytest.mark.parametrize("dtype_name", ("float16", "bfloat16"))
 def test_reduced_precision_on_gpu(strategy_name, dtype_name):
+    skip_if_dtype_unsupported(strategy_name, dtype_name)
     config = build_config(2, 64, 128, 8)
     result = compare_against_baseline(
         strategy_name, config, padding_ratio=0.3, dtype=resolve_dtype(dtype_name)
@@ -278,11 +299,28 @@ def test_reduced_precision_on_gpu(strategy_name, dtype_name):
 @pytest.mark.parametrize("strategy_name", STRATEGY_NAMES)
 def test_bfloat16_on_cpu_for_visibility(strategy_name):
     skip_if_cuda_only(strategy_name)
+    skip_if_dtype_unsupported(strategy_name, "bfloat16")
     config = build_config(2, 32, 64, 4)
     result = compare_against_baseline(
         strategy_name, config, padding_ratio=0.0, dtype=torch.bfloat16
     )
     assert result.passed, describe(result, strategy_name, "dtype=bfloat16 on CPU")
+
+
+def test_declared_dtype_support_is_a_recognised_set():
+    """A typo in SUPPORTED_DTYPES would silently exclude a dtype from testing."""
+    from src.strategies import ALL_DTYPES
+
+    for name in STRATEGY_NAMES:
+        declared = supported_dtypes(name)
+        assert declared <= ALL_DTYPES, (
+            f"{name} declares unknown dtypes: {sorted(declared - ALL_DTYPES)}"
+        )
+        assert declared, f"{name} declares an empty SUPPORTED_DTYPES"
+        assert "float32" in declared, (
+            f"{name} does not claim float32. Every strategy must be correct in "
+            "fp32 — that is the dtype the accuracy oracle runs in on CPU."
+        )
 
 
 # ---------------------------------------------------------------------------

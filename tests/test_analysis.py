@@ -258,9 +258,7 @@ def test_no_measurement_exceeds_the_machine_peak(frame):
     the FLOP model or the fixture is wrong. Either way, catch it here."""
     data = roofline_frame(frame)
     for _, row in data.iterrows():
-        peak = (RTX_4050_LAPTOP.peak_bf16_tflops
-                if row["dtype"] in ("float16", "bfloat16")
-                else RTX_4050_LAPTOP.peak_fp32_tflops)
+        peak = RTX_4050_LAPTOP.peak_for(str(row["dtype"]))
         assert row["achieved_tflops"] <= peak, (
             f"{row['strategy_name']} at {row['dtype']} achieves "
             f"{row['achieved_tflops']:.1f} TFLOP/s against a {peak} peak"

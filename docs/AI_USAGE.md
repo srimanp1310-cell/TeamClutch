@@ -294,3 +294,49 @@ written *now*, with no GPU.
 **Verification:** `pytest -q` green — 223 passed, 2 skipped, 1 xpassed, 9.6 s.
 `python docs/check_ready.py` correctly reports 69 outstanding placeholders and
 exits 1; on a directory with none it reports ready and exits 0.
+
+## 2026-08-28 — Integrating Person A's Rung 0 results and the bf16 finding
+**Tool:** Claude Code (Opus 5)
+**Prompt:** Person A reports SDPA passing at fp32/fp16 and failing at bf16 by
+exactly 2 ULP, asks for `SUPPORTED_DTYPES` to be honoured by the test suite, and
+supplies measured peak TFLOPS/bandwidth plus three real profiler traces. Act on
+all of it.
+**Output:** worked. Two real bugs in my own code surfaced, one of them serious.
+**What I had to fix:**
+- **`gpu_busy_fraction` returned 0.0 on A's real traces.** Under WSL2, CUPTI does
+  not populate device-side kernel records: the traces contain the complete
+  CPU-side story and *zero* kernel events. My parser dutifully found no kernels,
+  summed no busy time, and reported **0.0% GPU busy** — which reads as the most
+  catastrophic result imaginable rather than as a missing measurement. It now
+  returns NaN and every consumer says "unmeasurable"; a test asserts it never
+  returns 0.0 for a trace with no kernel track. This is the failure mode I wrote
+  three tests against (one per category spelling) and still shipped, because I
+  had only imagined the *spelling* varying, not the whole track being absent.
+- **Dispatch could hand a strategy a dtype it cannot compute.** With no
+  `results/` directory, the hard-coded fallback default was selected for every
+  dtype — so a bf16 tensor would have gone to a strategy that fails the
+  tolerance in bf16, returning quietly wrong numbers. That is the worst
+  available failure mode: not a crash, not a slowdown, a plausible wrong answer.
+  Added `SUPPORTED_DTYPES` as a third dispatch gate alongside registration and
+  capability.
+- **Verified A's ULP arithmetic before writing it into the report** rather than
+  taking it on trust: 1 ULP of bf16 at magnitude 2.17 is 0.015625 both
+  analytically and via `torch.nextafter`, so 2 ULP is 1.44% against a 1%
+  tolerance, and `rtol = 0.01` there is 1.389 ULP — tighter than the format's
+  own granularity. His analysis is exactly right, and the conclusion is a
+  statement about the benchmark rather than about our kernel.
+- **Corrected A's launch-count arithmetic in the other direction.** He counted 67
+  kernels/forward from `cudaLaunchKernel`. cuBLAS also submits via the *driver*
+  API (`cuLaunchKernel`), and those 144 records are not nested inside the
+  runtime-API ones — checked, not assumed. Real count is ~115/forward, and
+  measured per-launch cost is 15.5 us rather than the assumed 5. The small
+  shape's launch share is therefore 8.2%, not 2.5% — enough to move it from
+  "not launch-bound" to "borderline". His conclusion survives at medium and
+  large; at small it is now undecided rather than settled.
+- Replaced the roofline placeholders with A's measured peaks and made the plot
+  draw **one ceiling and one ridge per dtype**, since reduced precision raises
+  the compute roof and leaves the bandwidth roof alone — so the ridge moves
+  right and a workload can become *more* memory-bound in bf16.
+**Verification:** `pytest -q` green — 236 passed, 2 skipped, 1 xpassed.
+`make_all` runs end to end on A's real traces and results. The four measured
+ridge points reproduce A's numbers exactly (62.9 / 32.6 / 128.7 / 132.7).

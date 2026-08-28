@@ -209,6 +209,79 @@ def test_gating_falls_through_to_a_permitted_neighbour(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# dtype gate
+# ---------------------------------------------------------------------------
+
+class Fp32AndFp16Only(BaselineTransformer):
+    """Like the real SDPA strategy: correct in fp32/fp16, cannot meet the
+    tolerance in bf16 (see docs/INTERFACE.md 5.1)."""
+
+    SUPPORTED_DTYPES = (torch.float32, torch.float16)
+
+
+def test_a_strategy_is_never_selected_for_a_dtype_it_disclaims(tmp_path):
+    """The worst failure mode available is a plausible wrong answer. A strategy
+    that cannot meet the tolerance in bf16 must never be handed a bf16 tensor,
+    even when the table's default names it."""
+    path = tmp_path / "t.json"
+    path.write_text(json.dumps({
+        "sm_89": {"8,512,512,8,bfloat16,False,False": "sdpa"},
+        "default": "sdpa",
+    }))
+    available = {"baseline": BaselineTransformer, "sdpa": Fp32AndFp16Only}
+
+    assert select_strategy(key(dtype="bfloat16"), SM_89, str(path), available) == "baseline"
+    # ...and the same strategy is still selected for the dtypes it does claim.
+    assert select_strategy(key(dtype="float32"), SM_89, str(path), available) == "sdpa"
+    assert select_strategy(key(dtype="float16"), SM_89, str(path), available) == "sdpa"
+
+
+def test_the_dtype_rejection_reason_names_the_gate(tmp_path):
+    """"Rejected" alone is not actionable; the reason must say which gate."""
+    path = tmp_path / "t.json"
+    path.write_text(json.dumps({
+        "sm_89": {"8,512,512,8,bfloat16,False,False": "sdpa"}, "default": "baseline",
+    }))
+    available = {"baseline": BaselineTransformer, "sdpa": Fp32AndFp16Only}
+    reason = explain(key(dtype="bfloat16"), SM_89, str(path), available)
+    assert "does not support bfloat16" in reason
+    assert "float16" in reason and "float32" in reason
+
+
+def test_the_hard_coded_fallback_respects_the_dtype_gate():
+    """The regression this exists for: with no results/ directory at all, the
+    fallback default was selected for every dtype including unsupported ones."""
+    available = {"baseline": BaselineTransformer, "sdpa": Fp32AndFp16Only}
+    assert select_strategy(key(dtype="bfloat16"), SM_89,
+                           "/definitely/not/a/file.json", available) == "baseline"
+    assert select_strategy(key(dtype="float32"), SM_89,
+                           "/definitely/not/a/file.json", available) == "sdpa"
+
+
+def test_an_undeclared_strategy_is_assumed_to_support_everything():
+    """Not declaring SUPPORTED_DTYPES must not silently disable a strategy."""
+    available = {"baseline": BaselineTransformer, "anything": BaselineTransformer}
+    for dtype in ("float32", "float16", "bfloat16"):
+        assert select_strategy(key(dtype=dtype), SM_89,
+                               "/definitely/not/a/file.json", available) in available
+
+
+def test_dtype_and_capability_gates_compose(tmp_path):
+    """Both gates apply; failing either removes the candidate."""
+    class Bf16OnlyAmpere(BaselineTransformer):
+        SUPPORTED_DTYPES = (torch.bfloat16,)
+        MIN_CAPABILITY = (8, 0)
+
+    path = tmp_path / "t.json"
+    path.write_text(json.dumps({"default": "bf16_path"}))
+    available = {"baseline": BaselineTransformer, "bf16_path": Bf16OnlyAmpere}
+
+    assert select_strategy(key(dtype="bfloat16"), SM_80, str(path), available) == "bf16_path"
+    assert select_strategy(key(dtype="bfloat16"), SM_75, str(path), available) == "baseline"
+    assert select_strategy(key(dtype="float32"), SM_80, str(path), available) == "baseline"
+
+
+# ---------------------------------------------------------------------------
 # registration gate
 # ---------------------------------------------------------------------------
 
