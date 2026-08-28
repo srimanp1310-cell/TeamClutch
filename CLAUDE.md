@@ -18,3 +18,35 @@ python bench/torch_transformer_benchmark.py --device cpu --batch-size 2 --seq-le
 ```
 
 Before every commit: `pytest -q`. After every session: append an entry to `docs/AI_USAGE.md` (bonus points).
+
+## Measured hardware (RTX 4050 Laptop, low-TGP — NOT spec sheet)
+
+fp32 TF32-off 5.7 · fp32 TF32-on 11.0 · fp16 22.5 · bf16 23.2 TFLOPS
+Bandwidth 174.8 GB/s · VRAM 6.0 GB · capability (8, 9)
+Ridge point 62.9 FLOP/byte at TF32, 132.7 at bf16.
+bf16 measured faster than fp16 — prefer bf16.
+
+## Non-negotiable rules
+
+- Never edit bench/torch_transformer_benchmark.py — SHA-256 pinned, a test fails.
+- Never edit Person B's files: bench/sweep.py, bench/thermal.py,
+  bench/run_official.py, src/memcheck.py, src/dispatch.py, src/baseline.py,
+  src/strategies/__init__.py, analysis/*, tests/*, pyproject.toml.
+- Strategies subclass BaselineTransformer, decorate @register("name"),
+  signature forward(self, x, valid_token_mask=None).
+- Never rename or add parameters — copy_model_weights(strict=True) must pass.
+- Run `pytest -q` before every push. Ten seconds, CPU only.
+
+## Masking rules (usual source of failures)
+
+- valid_token_mask is [B,S] bool, True means KEEP (opposite of masked_fill).
+- Invalid KEY positions masked in attention: ~mask[:, None, None, :]
+- Output zeroed at invalid QUERY positions in several places.
+- Causal is triu(diagonal=1). diagonal=0 masks the diagonal -> NaN.
+- Softmax runs in fp32 and casts back even in bf16. Reduced-precision softmax
+  puts max_abs just over budget.
+
+## Context
+
+48-hour hackathon. Submittable by end of Day 1. Breadth over depth.
+Current rung: 0 (profiling). Next: SDPA.

@@ -192,3 +192,66 @@ python bench/sweep.py --strategy baseline --matrix quick
 
 If it doesn't, the measuring rig is lying and no other number we produce means
 anything. That's the Day-1 gate — worth doing before you write a single kernel.
+
+---
+
+# ANSWERS FROM A — 2026-08-28
+
+## 1.1 Three extra CSV columns
+**YES** — add `baseline_peak_vram_mb`, `compile_baseline`, `ffn_dim` at the end.
+
+## 1.2 Is SDPA safe on CPU?
+**NO** — CPU falls back to `baseline`. I can't test the CPU path and it isn't
+what we're being scored on.
+
+## 1.3 Tolerance target
+**Stricter pair: atol=0.001, rtol=0.01** (the torch script's defaults, not the
+PDF's 0.002/0.02). If we pass at 0.001 we pass at 0.002 either way.
+
+## 1.4 Peak TFLOPS and bandwidth — MEASURED, replace the placeholders
+
+This is a **low-TGP RTX 4050 Laptop**. Real numbers are roughly half the
+spec sheet. Measured on 2026-08-28, mains power, Windows "Best Performance",
+4096x4096 matmul / 512 MB device-to-device copy:
+
+| metric | measured |
+|---|---|
+| fp32 (TF32 off) | 5.7 TFLOPS |
+| fp32 (TF32 on) | **11.0 TFLOPS**  <- use this; benchmark defaults --allow-tf32 |
+| fp16 tensor | 22.5 TFLOPS |
+| bf16 tensor | **23.2 TFLOPS** |
+| memory bandwidth | **174.8 GB/s** (91% of 192 theoretical) |
+
+Ridge points (TFLOPS / bandwidth):
+- fp32 TF32 on: **62.9 FLOP/byte**  <- the one for the roofline
+- fp32 TF32 off: 32.6
+- fp16: 128.7
+- bf16: 132.7
+
+Note for the report: bf16 is marginally FASTER than fp16 here (23.2 vs 22.5),
+which is convenient since bf16 is also the numerically safer choice.
+TF32 nearly doubles fp32 throughput.
+
+## 1.5 Who creates the GitHub repo
+**You do** — already done, I cloned TeamClutch.
+
+---
+
+## Environment (for TECH_REPORT.md section 2)
+
+| item | value |
+|---|---|
+| CPU | Intel Core i7-12650HX (12th gen) |
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU |
+| Compute capability | sm_89 (8, 9) — Ada Lovelace |
+| VRAM | 6.0 GB GDDR6 |
+| OS | Windows 11 + WSL2, Ubuntu 24.04 |
+| PyTorch | 2.6.0+cu124 |
+| Triton | 3.2.0 |
+| Install | `pip install torch --index-url https://download.pytorch.org/whl/cu124` |
+
+## Gate results
+- `pytest -q` green on fresh clone (1 skip)
+- Control: `sweep.py --strategy baseline --matrix quick`
+  - B=8 S=128 d=512 H=8 fp32: **0.986x**, max_abs=0
+  - B=8 S=512 d=512 H=8 fp32: **1.001x**, max_abs=0

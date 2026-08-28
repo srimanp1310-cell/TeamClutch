@@ -1,0 +1,3 @@
+timestamp,git_sha,strategy_name,batch,seq_len,d_model,heads,layers,dtype,causal,padding_ratio,accuracy_pass,max_abs_err,max_rel_err,baseline_median_ms,optimized_median_ms,speedup,peak_vram_mb,mean_sm_clock_mhz,max_temp_c,notes,baseline_peak_vram_mb,compile_baseline,ffn_dim
+2026-08-27T17:10:01+00:00,91e1921,baseline,8,128,512,8,6,float32,False,0,True,0,0,5.9064,5.9884,0.9863,178.4,2272.5,60.0,,178.4,False,2048
+2026-08-27T17:10:37+00:00,91e1921,baseline,8,512,512,8,6,float32,False,0,True,0,0,42.9599,42.9138,1.0011,352.4,2475.0,66.0,,352.4,False,2048
