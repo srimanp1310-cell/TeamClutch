@@ -18,18 +18,61 @@ backends accumulate the softmax in fp32 internally, matching
 `torch.softmax(scores.float(), dim=-1)` in the reference) -- just without the
 round trips.
 
-bfloat16 is excluded via `SUPPORTED_DTYPES` (float32 and float16 only). The
-reference casts softmax probabilities back to the model dtype -- rounding
-them to bf16 -- *before* the `probs @ v` matmul. SDPA's fused kernels keep
-those probabilities in fp32 all the way to that matmul, so at bf16 we are
-strictly more accurate than the reference but no longer reproduce its
-rounding. Measured worst case is exactly 2 ULP of bf16: 1 ULP at magnitude
-~2.17 is 0.015625 (bf16 has an 8-bit mantissa: 2^-7 * 2^exponent, and
+Known precision limits
+----------------------
+
+Both limits below share one mechanism: this strategy is *more* accurate than
+the reference, and the gap is the reference's own rounding. Neither is a
+masking or causal bug, and neither can be closed from this file -- closing it
+would mean making `bench/torch_transformer_benchmark.py` less accurate, and
+that file must not be edited.
+
+**bfloat16, all depths.** The reference casts softmax probabilities back to the
+model dtype -- rounding them to bf16 -- *before* the `probs @ v` matmul. SDPA's
+fused kernels keep those probabilities in fp32 all the way to that matmul.
+Measured worst case is exactly 2 ULP of bf16: 1 ULP at magnitude ~2.17 is
+0.015625 (bf16 has an 8-bit mantissa: 2^-7 * 2^exponent, and
 2^floor(log2(2.17)) = 2^1, so 2^-7 * 2 = 0.015625), and the observed
-max_abs_error there is 0.03125 -- 2 ULP -- which is a 1.44% relative error
-against the accuracy check's 1% `rtol`. That is bf16 quantization noise
-compounding through two ops with a different rounding point, not a masking or
-causal bug: float16 and float32 pass on this exact same code path.
+max_abs_error there is 0.03125 -- 2 ULP -- a 1.44% relative error against the
+accuracy check's 1% `rtol`.
+
+**float32 + causal at num_layers >= 6, with TF32 on.** Not a passing config.
+Measured pass rate is **21/40 seeds (52%)** -- a coin flip, not a margin --
+with median max_abs 0.00117 and worst 0.00136 against the 0.001 `atol` budget.
+The error is entirely TF32: with `allow_tf32=False` on both implementations it
+collapses to 1.9e-06 (650x smaller). With TF32 on -- the organizers' default --
+the reference's `q @ k^T` and `probs @ v` are TF32 matmuls carrying ~1e-3
+relative noise, while SDPA's fp32 path runs on EFFICIENT_ATTENTION, which does
+not use TF32 reductions (Flash and cuDNN both reject fp32 inputs). The
+divergence is the reference's noise, not ours.
+
+It is depth that crosses the budget, not causality alone. Measured over 20
+seeds each, fp32, TF32 on::
+
+    causal=False L=6         20/20 (100%)   median max_abs 0.000735
+    causal=True  L=1         20/20 (100%)   median max_abs 0.000484
+    causal=True  L=2         20/20 (100%)   median max_abs 0.000705
+    causal=True  L=6         11/20 ( 55%)   median max_abs 0.00120
+
+Error grows ~sqrt(L) (4.8e-4 * sqrt(6) ~ 1.18e-3), and causal is ~2x
+non-causal at equal depth -- fewer keys per softmax means less averaging of
+the per-element noise. At L=6 that walks into the atol wall. Padding ratio is
+irrelevant to this: the worst elements sit at sequence positions 1-2, where
+causal masking already restricts attention to positions 0-2, so padding (which
+only masks keys at position >= 358 at ratio 0.3) never touches them.
+
+Two dead ends, recorded so they are not retried: forcing `SDPBackend.MATH`
+does not help (10/20 seeds), and SDPA's habit of folding `scale` into `q`
+before the matmul rather than scaling the product after contributes exactly
+zero, because `head_dim ** -0.5 = 0.125` here is a power of two and commutes
+exactly under any rounding.
+
+.. warning::
+   `SUPPORTED_DTYPES` below is **declarative only** -- as of this writing no
+   module in the repo reads it, so it excludes nothing at runtime. That is why
+   `results/results.csv` still contains failing bfloat16 rows. Enforcement
+   lives in `src/dispatch.py` (Person B's file); see the request in
+   `docs/APPROVALS_NEEDED.md`.
 """
 
 from __future__ import annotations
@@ -49,8 +92,14 @@ class SdpaTransformer(BaselineTransformer):
     REQUIRES_CUDA = False
     # bfloat16 excluded: see module docstring for the 2-ULP rounding-point
     # argument (baseline rounds softmax probs to bf16 before probs @ v; SDPA
-    # keeps fp32 all the way through). float16 and float32 match the reference.
+    # keeps fp32 all the way through).
+    #
+    # DECLARATIVE ONLY -- nothing in the repo reads this attribute yet, so it
+    # does not stop a bf16 run. See the warning in the module docstring.
     SUPPORTED_DTYPES = (torch.float32, torch.float16)
+    # float32 + causal + num_layers >= 6 passes only 52% of seeds with TF32 on.
+    # Also declarative; dispatch must route this shape to "baseline".
+    UNSUPPORTED_CAUSAL_MIN_LAYERS = 6
 
     def _attend(
         self,

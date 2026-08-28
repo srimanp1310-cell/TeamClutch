@@ -255,3 +255,102 @@ TF32 nearly doubles fp32 throughput.
 - Control: `sweep.py --strategy baseline --matrix quick`
   - B=8 S=128 d=512 H=8 fp32: **0.986x**, max_abs=0
   - B=8 S=512 d=512 H=8 fp32: **1.001x**, max_abs=0
+
+---
+
+# REQUESTS TO B FROM A — 2026-08-28 (Rung 1 causal accuracy audit)
+
+Four things, in priority order. R1 and R2 are correctness-of-the-record issues,
+R3 is a provenance gap that cost us a session, R4 is a dead declaration.
+
+## R1 — `latest_per_config` cannot express a PASS -> FAIL downgrade (please fix)
+
+**This one actually misreports our results right now.**
+
+`usable()` filters to `status == "PASS"` *before* `latest_per_config()` does its
+`groupby(...).tail(1)`. So a newer row that corrects an earlier PASS down to a
+FAIL is dropped by the filter and **can never supersede the row it corrects**.
+
+Concretely, after I appended two correcting rows today:
+
+```
+sdpa float32 causal L=6:
+  10:20:29  b96670e  pad=0.0  PASS  max_abs=0.001235   <- superseded, still winning
+  10:22:03  b96670e  pad=0.3  PASS  max_abs=0.001235   <- superseded, still winning
+  15:20:29  b96670e  pad=0.0  FAIL  max_abs=0.001358   <- the correction, invisible
+  15:20:29  b96670e  pad=0.3  FAIL  max_abs=0.001358   <- the correction, invisible
+
+latest_per_config() still returns the 10:20 / 10:22 rows, contributing
+2.1241x and 1.7784x to the speedup geomean.
+```
+
+Those two speedups are currently inflating our headline number with a config we
+know fails 48% of seeds. Suggested fix: do the `groupby().tail(1)` on the full
+frame first, *then* apply the PASS filter — so the newest row per config wins on
+its own merits rather than the newest *passing* row.
+
+## R2 — Please route `float32 + causal + layers >= 6` to `baseline` in dispatch
+
+I can't do this myself: `src/dispatch.py` is yours under both rule blocks in
+`CLAUDE.md`, and I'd rather ask than reach across the line.
+
+Measured with your sweep's exact global state (`manual_seed`,
+`matmul_precision="high"`, `allow_tf32=True`), 5 trials per seed:
+
+| config | pass rate | median max_abs | worst max_abs |
+|---|---|---|---|
+| `causal=False L=6` | 20/20 (100%) | 0.000735 | 0.000895 |
+| `causal=True L=1` | 20/20 (100%) | 0.000484 | 0.000566 |
+| `causal=True L=2` | 20/20 (100%) | 0.000705 | 0.000783 |
+| `causal=True L=6` | **21/40 (52%)** | **0.00117** | **0.00136** |
+
+Budget is `atol=0.001`. At L=6 causal we are a coin flip on the judge's seed.
+Padding ratio makes no difference (the worst elements sit at sequence positions
+1–2, where causal masking already restricts attention to positions 0–2).
+
+This is not a bug I can fix in `sdpa.py`: the error is TF32 noise in the
+*reference's* `q @ k^T` and `probs @ v`. With `allow_tf32=False` on both sides it
+collapses to 1.9e-06 (650x smaller). Our fp32 path runs on
+`EFFICIENT_ATTENTION`, which doesn't use TF32 reductions at all — so we are the
+accurate one, and closing the gap would mean making the organizers' file worse.
+Full write-up in the `sdpa.py` module docstring.
+
+## R3 — Three more `results.csv` columns: `seed`, `allow_tf32`, `input_scale`
+
+Same "append at the end, nothing already written breaks" argument you used for
+`baseline_peak_vram_mb` / `compile_baseline` / `ffn_dim` in 1.1, so I assume this
+is uncontroversial.
+
+**Why it matters:** I spent a session unable to reconstruct why the b7f6312
+causal row recorded `max_abs=0.00113016 FAIL` while the b96670e row recorded
+`max_abs=0.00123502 PASS`. `git diff b7f6312 b96670e -- src/strategies/sdpa.py`
+is **empty** — the strategy code is byte-identical between them. Neither row
+records the seed, the TF32 flag, or the input scale, and all three change the
+number. I could reproduce the b96670e value exactly but never the b7f6312 one,
+and with the current schema there is no way to tell whether that run used a
+different seed, a different `--allow-tf32`, or something else. Two of those
+rows are now un-diagnosable forever.
+
+## R4 — `SUPPORTED_DTYPES` is read by nothing
+
+```
+$ grep -rn "SUPPORTED_DTYPES" .
+src/strategies/sdpa.py:21   (docstring)
+src/strategies/sdpa.py:96   (the declaration)
+```
+
+No test, no sweep, no dispatch consumes it — which is why `results.csv` still
+contains failing bfloat16 rows for a strategy that "excludes" bfloat16. Either
+wire it into the sweep's dtype gate (the way `REQUIRES_CUDA` is honoured at
+`bench/sweep.py:727`), or tell me it's decorative and I'll stop implying
+otherwise in docstrings. I've added `UNSUPPORTED_CAUSAL_MIN_LAYERS = 6`
+alongside it for R2, marked equally declarative.
+
+## FYI — one flaky test, not yet chased
+
+`tests/test_strategies.py::test_reduced_precision_on_gpu[float16-sdpa]` failed
+once in a full-suite run and passed on the next two, and passes in isolation. It
+looks like cross-test global-precision pollution landing on a marginal fp16
+case. Not chasing it this session; flagging so it isn't mistaken for a
+regression. The two bfloat16 failures in that file are the known, documented
+limit and predate today.
