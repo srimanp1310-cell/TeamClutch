@@ -24,7 +24,9 @@ benchmark script, a plotting script, or a results file, **stop and read section
 ```bash
 git clone <REPO_URL>
 cd <repo>
-python3 -m venv .venv && source .venv/bin/activate
+# choose the command according to your system
+python -m venv .venv && source .venv/bin/activate #for mac
+python -m venv .venv && .venv\Scripts\activate.bat #for windows
 pip install --upgrade pip
 pip install torch --index-url https://download.pytorch.org/whl/cu124   # match your driver
 pip install -r requirements.txt
