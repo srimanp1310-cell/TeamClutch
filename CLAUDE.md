@@ -23,8 +23,16 @@ Before every commit: `pytest -q`. After every session: append an entry to `docs/
 
 fp32 TF32-off 5.7 · fp32 TF32-on 11.0 · fp16 22.5 · bf16 23.2 TFLOPS
 Bandwidth 174.8 GB/s · VRAM 6.0 GB · capability (8, 9)
-Ridge point 62.9 FLOP/byte at TF32, 132.7 at bf16.
-bf16 measured faster than fp16 — prefer bf16.
+Ridge points: 62.9 FLOP/byte fp32(TF32), 128.7 fp16, 132.7 bf16 — the ridge
+moves RIGHT as precision drops, so reduced precision can make a workload MORE
+memory-bound, not less.
+
+**Ship fp16, not bf16.** bf16 is 3% faster on this card but cannot pass the
+accuracy oracle: the worst element is 2 ULP of bf16 (1.44% relative) against a
+1% rtol, because the reference rounds softmax probabilities to bf16 before the
+PV matmul and a fused kernel does not. See docs/INTERFACE.md §5.1. Strategies
+declare `SUPPORTED_DTYPES = (torch.float32, torch.float16)`; dispatch then never
+routes bf16 to them.
 
 ## Non-negotiable rules
 
