@@ -12,6 +12,23 @@ tens of seconds on a cold cache.
 Prepare beforehand: a clean terminal at a readable font size, the repo at a
 committed SHA, `results/figures/` already generated, and the machine cool.
 
+**Have the results page open in a browser tab before you start recording.**
+Regenerate it first so it reflects the committed state:
+
+```bash
+git pull && python -m analysis.make_all
+explorer.exe "$(wslpath -w results/report.html)"    # WSL2 -> Windows browser
+```
+
+It is a static file — no server, nothing to crash mid-take, works offline. It
+does not auto-update, so if you re-run a sweep between takes, regenerate and
+reload the tab. The page is laid out to about 1080px wide, which reads cleanly
+at 1080p; zoom the browser to ~110% if you are recording at 720p.
+
+Alternate between the terminal and that tab rather than opening individual PNGs
+— the page carries the sentence that makes each figure matter, which is what you
+are narrating.
+
 ---
 
 ## 0:00–0:20 — The problem, stated once

@@ -84,6 +84,48 @@ Verify the organizers' file was never modified:
 shasum -a 256 bench/torch_transformer_benchmark.py   # must match docs/INTERFACE.md
 ```
 
+## Viewing the results page
+
+`python -m analysis.make_all` writes **`results/report.html`** — one page with
+every figure and every headline number, for reading, screen-recording or
+attaching to a submission.
+
+It is a **static file**, not a served app. There is no port and nothing to keep
+running: every figure is embedded in the file itself, so it opens straight from
+disk and works offline.
+
+```bash
+# macOS
+open results/report.html
+
+# WSL2 — opens in the default Windows browser.
+# `open` does not exist on Linux and `xdg-open` usually fails under WSL;
+# this converts the WSL path to a Windows one, which is what actually works.
+explorer.exe "$(wslpath -w results/report.html)"
+
+# plain Linux
+xdg-open results/report.html
+```
+
+**The numbers do not update by themselves.** They are baked in when the file is
+written, so a page open in a tab keeps showing whatever the log said at
+generation time. To refresh it:
+
+```bash
+git pull                      # pick up the other person's measurements
+python -m analysis.make_all   # regenerate — about a second
+```
+
+…then reload the browser tab. That is deliberate: the page is a snapshot tied to
+a commit, not a live view. Every number traces to append-only rows that each
+carry the git SHA they were produced at, and the footer stamps the generation
+time and row count — so what is on screen during a recording is exactly what is
+in the log.
+
+If the page looks mostly empty, that is not a bug: it is honestly reporting that
+`results/results.csv` has no rows for those figures yet. Each empty panel names
+the sweep command that would fill it.
+
 ## Results
 
 _TODO: `results/summary.md` table (geometric-mean speedup, min, max, n) and the

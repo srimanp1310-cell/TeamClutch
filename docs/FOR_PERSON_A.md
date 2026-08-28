@@ -499,6 +499,41 @@ our head. That only works if we don't quietly reach into each other's half.
 
 ---
 
+## 11b. Viewing the results page (you'll need this for the video)
+
+`python -m analysis.make_all` writes `results/report.html` — every figure and
+every headline number on one page, with the claim each figure supports. That is
+what to narrate over, rather than opening individual PNGs.
+
+It is a **static file**. No server, no port, nothing to keep running — all the
+figures are embedded inside it, so it opens from disk and works offline.
+
+```bash
+# WSL2 — this is the one that works. `open` is macOS-only, and `xdg-open`
+# usually fails under WSL. wslpath converts to a Windows path so the default
+# Windows browser can find it.
+explorer.exe "$(wslpath -w results/report.html)"
+```
+
+**It does not update on its own.** The numbers are written into the file when
+it is generated, so a tab you left open keeps showing the old ones. After any
+sweep:
+
+```bash
+git pull && python -m analysis.make_all
+```
+
+…then reload the tab. Takes about a second.
+
+That is on purpose: the page is a snapshot tied to a commit, not a live view.
+The footer stamps the generation time and row count, and every number traces to
+rows carrying their own git SHA — so what is on screen while you are recording
+is provably what is in the log.
+
+If a section looks empty, it is telling you the truth: no rows in
+`results/results.csv` support that figure yet, and the panel names the sweep
+command that would fill it.
+
 ## 12. Command cheat sheet
 
 ```bash
@@ -524,8 +559,11 @@ python bench/run_official.py --batch-size 8 --seq-len 1024 --dtype bfloat16
 # Will this config OOM before I try it?
 python -m src.memcheck --batch 8 --seq-len 4096 --d-model 512 --heads 8
 
-# Regenerate every figure, the dispatch table and results/summary.md
+# Regenerate every figure, the dispatch table, results/summary.md and report.html
 python -m analysis.make_all
+
+# Open the results page (WSL2 -> Windows browser)
+explorer.exe "$(wslpath -w results/report.html)"
 
 # What's still unfilled in the submission docs?
 python docs/check_ready.py --owner A
