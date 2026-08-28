@@ -252,13 +252,43 @@ baseline is a measurement like any other and can be wrong; ours was, and it was
 caught by two tools disagreeing rather than by either one looking suspicious on
 its own.
 
-### Rung 1 — `<FILL A: name, e.g. scaled_dot_product_attention>`
+### Rung 1 — `scaled_dot_product_attention`
 
-- **Hypothesis:** `<FILL A>`
-- **What changed:** `<FILL A: the actual code change, one paragraph>`
-- **Before → after:** `<FILL B: median ms at each shape, from results.csv>`
-- **Accuracy:** `<FILL B: max_abs_err, max_rel_err>`
-- **Surprise:** `<FILL A: what you did not expect>`
+- **Hypothesis (recorded before measuring):** attention is ~4% of FLOPs at
+  S=128 and ~40% at S=2048, so a fused attention kernel should barely move the
+  small shape and help substantially at the large one.
+- **What changed:** the explicit `QKᵀ → mask → fp32 softmax → PV` sequence
+  replaced by `F.scaled_dot_product_attention`, which never materializes the
+  `[B, H, S, S]` score matrix in HBM.
+- **Measured:** **0.899× at S=128** (slower than baseline) and **1.693× at
+  S=512**. `<FILL B: fill in S=256/1024/2048 from --matrix crossover.>`
+- **Accuracy:** fp32 passes. `max_abs = 0.0075` at the default depth — 7.5× the
+  `atol` budget, passing on the relative leg alone. See §7.2.
+- **Surprise, and the best result in the project so far:** 1.693× is *above the
+  Amdahl ceiling*.
+
+  Attention is 14.3% of the forward pass's FLOPs at S=512, so making it
+  infinitely fast can yield at most `1/(1 − 0.143) = 1.167×` — **if time were
+  spent in proportion to arithmetic**. We measured 1.693×. Inverting Amdahl,
+  that speedup requires attention to have been **41% of the runtime**, which is
+  **2.9× its share of the arithmetic**.
+
+  A region cannot consume triple its arithmetic share unless it is waiting on
+  something other than arithmetic. This is direct evidence that the baseline's
+  attention was **memory-bound** — the cost was writing and re-reading the score
+  matrix, exactly as §1.1 predicted from the byte counts, and not the two GEMMs.
+  The prediction was recorded before the measurement and the measurement
+  overshot it in the direction the mechanism implies.
+
+  The S=128 result is the same argument from the other side: the ceiling there
+  is only 1.042×, so there is almost nothing to win, and SDPA's own dispatch
+  overhead makes it a net loss at 0.899×. **A crossover exists between S=128 and
+  S=512, and it is the empirical justification for the dispatch layer** — not a
+  design flourish but a measured sign change. `--matrix crossover` samples
+  S ∈ {128, 192, 256, 320, 384, 512, 768, 1024} to locate it.
+
+- **Saturation:** speedup settles at 1.65–1.67× beyond 2 layers — the
+  steady-state attention share, once per-call overheads are amortized.
 
 ### Rung 2 — `<FILL A: e.g. bf16>`
 
@@ -269,13 +299,28 @@ its own.
   and how much margin remained.
 - **Surprise:** `<FILL A>`
 
-### Rung 3 — `<FILL A: e.g. torch.compile>`
+### Rung 3 — reduced precision: **abandoned, with a measurement**
 
-- **Hypothesis:** `<FILL A>`
-- **What changed:** `<FILL A>`
-- **Before → after:** `<FILL B>`
-- **Surprise:** `<FILL A>` — note that some of this gain is the compiler's
-  rather than ours; §10 separates them.
+This rung was planned as fp16/bf16 execution and is **dead**, not deprioritized.
+Neither format can be shipped at the benchmark's default depth. The full
+analysis is §7.1 and §7.2; the short version:
+
+| dtype | 1 layer | 2+ layers | 6 layers (the default) |
+|---|---|---|---|
+| fp32 | passes | passes | passes (on the relative leg) |
+| fp16 | **passes**, 2.020× | fails | fails |
+| bf16 | fails | fails | fails |
+
+The constraint is the tolerance against the format's granularity, not a defect
+in the kernel. Recording it as a negative result rather than omitting the rung:
+the measurement that closes a direction is worth as much as one that opens it,
+and it is what redirected the remaining effort.
+
+**Consequence for the rest of the project.** With reduced precision unavailable,
+the ~2× throughput the hardware offers in fp16/bf16 is unreachable, and fusion
+plus shape dispatch have to carry the result on their own. That raises the value
+of a fused LayerNorm (Rung 6) considerably — it is now one of the few remaining
+sources of gain rather than a nice-to-have.
 
 ### Rung 4 — `<FILL A: e.g. fused QKV projection>`
 
@@ -489,6 +534,54 @@ of ours that bf16 was the better target — it is faster on this card and it is
 the numerically more robust format in general, but it cannot clear this
 benchmark's bar, and correctness is not negotiable against 3%.
 
+### 7.2 The precision ceiling: error compounds with depth
+
+bf16 (§7.1) fails at every depth. fp16 is the more interesting case, because it
+fails *conditionally*:
+
+| depth | fp16 max_abs | verdict |
+|---|---|---|
+| 1 layer | — | **passes**, 2.020× |
+| 2 layers | 0.0059 | fails |
+| 6 layers (default) | 0.0078 | fails — 4 ULP of fp16 |
+
+Error accumulates through the residual stream: each layer's output is the next
+layer's input, so a rounding difference introduced in layer 1 is carried and
+re-perturbed five more times.
+
+**How fast it accumulates is itself a measurement.** In fp32 the worst-case
+error grows from 0.00024 at 1 layer to 0.00084 at 6 — a factor of 3.5. Two
+reference behaviours bracket that:
+
+- if per-layer errors were independent and random, they would add in quadrature
+  and grow as `√L` — a factor of 2.45 over six layers;
+- if they were perfectly correlated, they would add linearly as `L` — a factor
+  of 6.
+
+The observed 3.5 is `L^0.70`, sitting between the two and closer to the random
+walk. The errors are therefore **partially correlated** — not the independent
+noise a `√L` model assumes, but nowhere near worst-case accumulation. This
+matters for extrapolation: a 12-layer model would be expected around `0.00084 ×
+2^0.70 ≈ 0.0014`, not the 0.0012 a `√L` rule would predict.
+
+**The consequence.** fp32 at 6 layers reaches `max_abs = 0.0075`, which is 7.5×
+the `atol` budget of 0.001; it passes only because the *relative* leg of the OR
+rule carries it. There is roughly one order of magnitude of headroom left before
+fp32 itself would be at risk, and every reduced-precision format has already
+spent it. **At the benchmark's default depth, fp32 is the only shippable
+dtype** — which is the constraint the rest of the optimization had to work
+inside.
+
+**A note on how this interacts with dispatch.** Numerical admissibility turns
+out to depend on *depth*, which the dispatcher deliberately does not key on
+(§5 — depth changes how long a forward takes but not which kernel suits a
+shape). That reasoning holds for performance and fails for correctness. Rather
+than adding depth to the dispatch key, strategies declare `SUPPORTED_DTYPES`
+conservatively — for the deepest configuration we ship — so a dtype that is
+admissible only at 1 layer is simply not offered. A safe answer at every depth
+is preferable to a fast one that depends on a config axis the dispatcher cannot
+see.
+
 The correctness suite crosses every registered strategy against three shapes
 (including `S=33`, `d=96`, `heads=3` — non-power-of-two on both axes), padding
 `{0, 0.3}`, and causal `{off, on}`, plus edge cases at `S=1` and
@@ -614,10 +707,13 @@ Stated plainly, because a report that claims no limitations is not credible.
    *which kernel* owned the time. The launch-count argument substitutes for the
    launch-bound question, but a per-kernel breakdown would have been better
    evidence and we do not have it.
-8. **bf16 is not shippable against this reference at `rtol = 0.01`** (§7.1), so
-   every reduced-precision number here is fp16. That is a constraint imposed by
-   the benchmark's tolerance, not a limit of the hardware — the card is
-   marginally faster in bf16.
+8. **No reduced precision at all.** bf16 fails at every depth (§7.1) and fp16
+   fails at two layers and beyond (§7.2), so at the benchmark's default of 6
+   layers fp32 is the only shippable dtype. The card offers roughly 2× the
+   throughput in fp16/bf16 and we cannot use any of it. This is a constraint
+   imposed by the tolerance against the formats' granularity, not a defect in
+   the kernels — and it is the single largest piece of performance left on the
+   table.
 9. `<FILL A: anything else you hit and worked around.>`
 
 ### 11.1 Negative results

@@ -168,7 +168,7 @@ class RunSpec:
 #: Axis varied by each named matrix, and the values it takes. `mask` varies two
 #: axes together because padding and causality are not independent questions.
 _OFAT_AXES: Dict[str, Tuple[str, Sequence]] = {
-    "seq": ("seq_len", (128, 512, 1024, 2048)),
+    "seq": ("seq_len", (128, 256, 512, 1024, 2048)),
     "batch": ("batch", (1, 8, 32)),
     "dmodel": ("d_model", (256, 512, 1024)),
     "dtype": ("dtype", ("float32", "float16", "bfloat16")),
@@ -200,8 +200,19 @@ _ACCURACY_DTYPES = ("float32", "float16", "bfloat16")
 #: S=2048, so the interesting rows would all be SKIPPED before anything ran.
 _LONG_SEQ_LENGTHS = (2048, 4096, 8192)
 
+#: Dense sampling across the region where a fused attention path stops losing
+#: and starts winning.
+#:
+#: The crossover is not a curiosity — it *is* the dispatch table's justification.
+#: If a strategy is slower at S=128 and faster at S=512, the shape check that
+#: picks between them needs to know where the sign changes, and the OFAT `seq`
+#: sweep steps 128 -> 256 -> 512, which brackets it but does not locate it.
+#: Powers of two and their midpoints, because the underlying quantity
+#: (attention's share of the work) grows smoothly with S.
+_CROSSOVER_SEQ_LENGTHS = (128, 192, 256, 320, 384, 512, 768, 1024)
+
 MATRIX_NAMES = ("default", "quick", "seq", "batch", "dmodel", "dtype", "layers",
-                "mask", "accuracy", "long")
+                "mask", "accuracy", "long", "crossover")
 
 
 def build_matrix(name: str, base: RunSpec) -> List[RunSpec]:
@@ -214,6 +225,8 @@ def build_matrix(name: str, base: RunSpec) -> List[RunSpec]:
             replace(base, padding_ratio=pad, causal=causal)
             for pad, causal in _MASK_COMBINATIONS
         ]
+    elif name == "crossover":
+        specs = [replace(base, seq_len=s) for s in _CROSSOVER_SEQ_LENGTHS]
     elif name == "long":
         specs = [replace(base, batch=1, seq_len=s) for s in _LONG_SEQ_LENGTHS]
     elif name == "accuracy":
@@ -250,6 +263,8 @@ def varied_axes(name: str) -> Tuple[str, ...]:
         return ("layers", "dtype")
     if name == "long":
         return ("batch", "seq_len")
+    if name == "crossover":
+        return ("seq_len",)
     if name == "quick":
         return ("seq_len", "dtype", "padding_ratio", "causal")
     if name == "default":

@@ -151,11 +151,27 @@ def test_matrix_quick_varies_only_seq_len(tmp_path):
 
 @pytest.mark.parametrize(
     "name,expected",
-    [("seq", 4), ("batch", 3), ("dmodel", 3), ("dtype", 3), ("layers", 4),
-     ("mask", 4), ("quick", 2), ("accuracy", 12), ("long", 3)],
+    [("seq", 5), ("batch", 3), ("dmodel", 3), ("dtype", 3), ("layers", 4),
+     ("mask", 4), ("quick", 2), ("accuracy", 12), ("long", 3), ("crossover", 8)],
 )
 def test_matrix_sizes(name, expected):
     assert len(sweep.build_matrix(name, sweep.RunSpec())) == expected
+
+
+def test_crossover_matrix_brackets_the_sign_change():
+    """A strategy slower at S=128 and faster at S=512 has a crossover between
+    them, and the dispatch table's shape check needs to know where. The OFAT
+    `seq` sweep brackets it; this one locates it."""
+    specs = sweep.build_matrix("crossover", sweep.RunSpec())
+    lengths = [s.seq_len for s in specs]
+    assert lengths == sorted(lengths)
+    assert lengths[0] <= 128 and lengths[-1] >= 1024
+    assert 256 in lengths, "256 is where the crossover is expected"
+    assert all(s.batch == sweep.RunSpec().batch for s in specs)
+
+
+def test_seq_matrix_includes_the_crossover_region():
+    assert 256 in [s.seq_len for s in sweep.build_matrix("seq", sweep.RunSpec())]
 
 
 def test_long_matrix_targets_the_vram_ceiling():

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -30,6 +30,8 @@ from analysis.style import INK, MARKERS, SERIES, finish, new_figure
 __all__ = [
     "MachineSpec", "RTX_4050_LAPTOP",
     "forward_flops", "forward_bytes", "explicit_attention_bytes",
+    "attention_flops", "attention_flop_share", "amdahl_ceiling",
+    "implied_time_share",
     "arithmetic_intensity", "achieved_tflops", "ridge_point",
     "roofline_frame", "plot_roofline",
 ]
@@ -70,6 +72,16 @@ class MachineSpec:
 
 RTX_4050_LAPTOP = MachineSpec()
 
+#: Dtypes we can actually ship at the benchmark's default depth (6 layers).
+#:
+#: fp16 and bf16 are *architecturally* available and faster — the card reaches
+#: roughly twice the fp32 throughput in either. Neither can be shipped: error
+#: compounds with depth, and by 6 layers both exceed the tolerance
+#: (docs/TECH_REPORT.md §7.1-7.2). So their roofs are real hardware ceilings
+#: that our accuracy constraint puts out of reach, and the roofline draws them
+#: as such rather than implying headroom we cannot use.
+SHIPPABLE_DTYPES: Tuple[str, ...] = ("float32",)
+
 
 def _dims(config) -> tuple:
     """(B, S, d, H, f, L) from a TransformerConfig or a mapping/Series."""
@@ -96,6 +108,48 @@ def forward_flops(config) -> int:
     b, s, d, _h, f, layers = _dims(config)
     per_layer = 8 * b * s * d * d + 4 * b * s * s * d + 4 * b * s * d * f
     return int(layers * per_layer)
+
+
+def attention_flops(config) -> int:
+    """Just the two attention GEMMs (QK^T and PV), across all layers."""
+    b, s, d, _h, _f, layers = _dims(config)
+    return int(layers * 4 * b * s * s * d)
+
+
+def attention_flop_share(config) -> float:
+    """Attention's share of the forward pass, by FLOP count."""
+    total = forward_flops(config)
+    return attention_flops(config) / total if total else float("nan")
+
+
+def amdahl_ceiling(config) -> float:
+    """Best speedup obtainable by making attention *infinitely fast*.
+
+    `1 / (1 - p)` where `p` is attention's FLOP share. This is the honest
+    ceiling for any attention-only optimization **if** time were spent in
+    proportion to FLOPs.
+
+    It is the most useful number in the project for one reason: beating it is
+    evidence. A measured speedup above this ceiling cannot be explained by
+    removing attention arithmetic, so it must come from removing attention
+    *memory traffic* — which is exactly the claim that the explicit
+    `[B, H, S, S]` score matrix was the real cost.
+    """
+    share = attention_flop_share(config)
+    return 1.0 / (1.0 - share) if share < 1 else float("inf")
+
+
+def implied_time_share(speedup: float) -> float:
+    """Runtime fraction attention must have held to explain `speedup`.
+
+    Inverts Amdahl: if making a region free yields speedup S, that region was
+    `1 - 1/S` of the runtime. Comparing this against `attention_flop_share`
+    quantifies how far attention was over-represented in time relative to its
+    arithmetic — the size of the memory-bound effect, as a single number.
+    """
+    if speedup <= 0:
+        return float("nan")
+    return 1.0 - 1.0 / speedup
 
 
 def _element_size(dtype: str) -> int:
@@ -202,6 +256,7 @@ def plot_roofline(
     out_dir: Path | str = "results/figures",
     machine: MachineSpec = RTX_4050_LAPTOP,
     filename: str = "roofline.png",
+    shippable: Sequence[str] = SHIPPABLE_DTYPES,
 ) -> Path:
     """Log-log roofline: one roof and one ridge *per dtype*, points measured.
 
@@ -250,18 +305,28 @@ def plot_roofline(
 
     for index, (dtype, peak) in enumerate(roofs):
         roof = [min(peak, machine.bandwidth_gbs * 1e9 * xi / 1e12) for xi in x]
-        style = ("-", "--", ":")[index % 3]
-        ax.plot(x, roof, style, color=INK["secondary"], linewidth=1.3,
-                label=f"{dtype} roof — {peak:g} TFLOP/s", zorder=1)
+        usable = str(dtype) in shippable
+        # An unreachable roof is drawn faintly and labelled: it is a real
+        # hardware ceiling that our accuracy constraint puts out of reach, and
+        # showing it solid would imply headroom we cannot actually use.
+        ax.plot(
+            x, roof,
+            "-" if usable else ":",
+            color=INK["secondary"] if usable else INK["muted"],
+            linewidth=1.4 if usable else 1.0,
+            label=(f"{dtype} roof — {peak:g} TFLOP/s" if usable
+                   else f"{dtype} roof — {peak:g} TFLOP/s (unreachable: fails tolerance at depth)"),
+            zorder=1,
+        )
 
         ridge = ridge_point(peak, machine.bandwidth_gbs)
         if x[0] <= ridge <= x[-1]:
-            ax.plot([ridge], [peak], marker="|", color=INK["secondary"],
-                    markersize=9, zorder=2)
+            colour = INK["secondary"] if usable else INK["muted"]
+            ax.plot([ridge], [peak], marker="|", color=colour, markersize=9, zorder=2)
             ax.annotate(
                 f"{ridge:.0f}",
                 xy=(ridge, peak), xytext=(3, -11), textcoords="offset points",
-                fontsize=8, color=INK["secondary"],
+                fontsize=8, color=colour,
             )
 
     # --- the measurements --------------------------------------------------
@@ -306,9 +371,12 @@ def plot_roofline(
                        title="strategy", title_fontsize=8)
     second.get_title().set_color(INK["secondary"])
 
+    unreachable = [d for d, _ in roofs if str(d) not in shippable]
+    note = (f" · dotted roofs unreachable under the accuracy constraint"
+            if unreachable else "")
     finish(fig, ax, "Roofline",
            f"{machine.name} · {machine.bandwidth_gbs:g} GB/s measured · "
-           "ridge point (FLOP/byte) marked per dtype")
+           f"ridge point (FLOP/byte) marked per dtype{note}")
     fig.savefig(path)
     import matplotlib.pyplot as plt
     plt.close(fig)

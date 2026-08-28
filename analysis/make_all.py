@@ -38,6 +38,7 @@ DEFAULT_LOGS = "logs"
 DEFAULT_FIGURES = "results/figures"
 DEFAULT_SUMMARY = "results/summary.md"
 DEFAULT_DISPATCH = "results/dispatch_table.json"
+DEFAULT_PAGE = "results/report.html"
 
 
 def _load_traces(logs_dir: Path) -> dict:
@@ -294,6 +295,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--figures", default=DEFAULT_FIGURES)
     parser.add_argument("--summary", default=DEFAULT_SUMMARY)
     parser.add_argument("--dispatch", default=DEFAULT_DISPATCH)
+    parser.add_argument("--page", default=DEFAULT_PAGE,
+                        help="single-page HTML report; the thing to narrate over on video")
     parser.add_argument("--capability", default="sm_89",
                         help="GPU the measurements came from; keys the dispatch table")
     args = parser.parse_args(argv)
@@ -345,6 +348,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     summary_path = _write_summary(frame, Path(args.summary), produced,
                                   results_path, traces)
     print(f"  {summary_path}")
+
+    # Built last: it embeds the figures above as data URIs, so it must run after
+    # they exist on disk.
+    from analysis.report_page import write_page
+
+    page_path = write_page(args.page, results_path, figure_dir)
+    print(f"  {page_path}")
 
     crossover = crossover_table(frame)
     if not crossover.empty:

@@ -108,9 +108,19 @@ def load_results(path: Path | str) -> pd.DataFrame:
 
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce", utc=True, format="mixed")
     frame["notes"] = frame["notes"].fillna("")
-    frame["status"] = frame.apply(_derive_status, axis=1)
+    frame["status"] = (pd.Series(dtype="object") if frame.empty
+                       else frame.apply(_derive_status, axis=1))
     frame["discarded"] = frame["notes"].str.contains("DISCARD:", na=False)
     frame["padded"] = frame["padding_ratio"].fillna(0) > 0
+
+    # `DataFrame.apply(axis=1)` on an empty frame returns a DataFrame rather
+    # than a Series, so assigning its result to one column raises. A results.csv
+    # with a header and no rows is the normal state before the first sweep, so
+    # this path has to work.
+    if frame.empty:
+        frame["config_key"] = pd.Series(dtype="object")
+        frame["dispatch_key"] = pd.Series(dtype="object")
+        return frame
 
     frame["config_key"] = frame.apply(
         lambda row: ",".join(str(row[field]) for field in CONFIG_FIELDS), axis=1
