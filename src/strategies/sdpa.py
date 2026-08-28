@@ -36,6 +36,21 @@ Measured worst case is exactly 2 ULP of bf16: 1 ULP at magnitude ~2.17 is
 max_abs_error there is 0.03125 -- 2 ULP -- a 1.44% relative error against the
 accuracy check's 1% `rtol`.
 
+**float16 at num_layers >= 2.** Not a passing config. Measured consistently
+across 763ac93, b7f6312 and b96670e::
+
+    fp16 L=1  PASS  max_abs 0.003906
+    fp16 L=2  FAIL  max_abs 0.005859
+    fp16 L=4  FAIL  max_abs 0.007812
+    fp16 L=6  FAIL  max_abs 0.007812
+
+Here it is `rtol=0.01` carrying the check, not `atol` -- fp16 error at these
+magnitudes is well above 0.001, so every element rests on the relative bound,
+and by two layers enough elements exceed 1% to fail. Same mechanism as bf16,
+one rounding step finer: the reference rounds softmax probabilities to fp16
+before `probs @ v` and we do not, so the two diverge by a rounding step per
+layer and the divergence compounds with depth.
+
 **float32 + causal at num_layers >= 6, with TF32 on.** Not a passing config.
 Measured pass rate is **21/40 seeds (52%)** -- a coin flip, not a margin --
 with median max_abs 0.00117 and worst 0.00136 against the 0.001 `atol` budget.
@@ -96,6 +111,10 @@ class SdpaTransformer(BaselineTransformer):
     #
     # DECLARATIVE ONLY -- nothing in the repo reads this attribute yet, so it
     # does not stop a bf16 run. See the warning in the module docstring.
+    #
+    # float16 is listed but is only safe at num_layers == 1; it fails from two
+    # layers up. A flat dtype tuple cannot express that, which is the second
+    # reason enforcement has to live in the router rather than here.
     SUPPORTED_DTYPES = (torch.float32, torch.float16)
     # float32 + causal + num_layers >= 6 passes only 52% of seeds with TF32 on.
     # Also declarative; dispatch must route this shape to "baseline".

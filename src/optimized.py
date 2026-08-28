@@ -30,14 +30,27 @@ Correctness gates first, then performance:
 
 1. no CUDA               -> baseline  (per docs/APPROVALS_NEEDED.md 1.2)
 2. bfloat16              -> baseline  (fails at every depth; see sdpa.py)
-3. causal and L >= 6     -> baseline  (52% of seeds; see sdpa.py)
-4. batch == 1            -> baseline  (measured 0.853x -- a regression)
-5. seq_len <= 128        -> baseline  (measured 0.910x -- a regression)
-6. otherwise             -> sdpa
+3. float16 and L >= 2    -> baseline  (fp16 passes at L=1 only; see below)
+4. causal and L >= 6     -> baseline  (52% of seeds; see sdpa.py)
+5. batch == 1            -> baseline  (measured 0.853x -- a regression)
+6. seq_len <= 128        -> baseline  (measured 0.910x -- a regression)
+7. otherwise             -> sdpa
 
-Rules 1 and 2 are not in the measured table; they are correctness gates carried
-over from the documented limits, and they are marked below so they are easy to
-find if the underlying limits ever move.
+Rules 1-4 are correctness gates rather than performance tuning, and they are
+marked as such below so they are easy to find if the underlying limits move.
+
+The float16 depth limit is measured, consistent across three commits
+(763ac93, b7f6312, b96670e) and recorded in results.csv:
+
+    fp16 L=1  PASS  max_abs 0.003906
+    fp16 L=2  FAIL  max_abs 0.005859
+    fp16 L=4  FAIL  max_abs 0.007812
+    fp16 L=6  FAIL  max_abs 0.007812
+
+Note the tolerance here is `rtol=0.01` doing the work, not `atol`: fp16 error
+at these magnitudes is far above 0.001, so every element depends on the
+relative bound, and by L=2 enough of them exceed 1% to fail. Routing fp16 to
+the fused path at any depth past 1 ships a known-failing config.
 
 Two notes on cost
 -----------------
@@ -84,6 +97,9 @@ MIN_BATCH_FOR_SDPA = 2
 #: Causal at this depth or deeper passes only 52% of seeds. See sdpa.py.
 MAX_CAUSAL_LAYERS_FOR_SDPA = 5
 
+#: float16 passes at one layer and fails at two or more. See the table above.
+MAX_FP16_LAYERS_FOR_SDPA = 1
+
 
 class UserOptimizedTransformer(SdpaTransformer):
     """Routes each forward to whichever of baseline / sdpa is right for the shape.
@@ -113,15 +129,18 @@ class UserOptimizedTransformer(SdpaTransformer):
             return False                                    # rule 1
         if x.dtype is torch.bfloat16:
             return False                                    # rule 2
-        if self.config.causal and self.config.num_layers > MAX_CAUSAL_LAYERS_FOR_SDPA:
+        if (x.dtype is torch.float16
+                and self.config.num_layers > MAX_FP16_LAYERS_FOR_SDPA):
             return False                                    # rule 3
+        if self.config.causal and self.config.num_layers > MAX_CAUSAL_LAYERS_FOR_SDPA:
+            return False                                    # rule 4
 
         # -- performance rules -----------------------------------------------
         if batch < MIN_BATCH_FOR_SDPA:
-            return False                                    # rule 4
-        if seq_len < MIN_SEQ_LEN_FOR_SDPA:
             return False                                    # rule 5
-        return True                                         # rule 6
+        if seq_len < MIN_SEQ_LEN_FOR_SDPA:
+            return False                                    # rule 6
+        return True                                         # rule 7
 
     def forward(
         self,
