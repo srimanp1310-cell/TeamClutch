@@ -354,3 +354,37 @@ looks like cross-test global-precision pollution landing on a marginal fp16
 case. Not chasing it this session; flagging so it isn't mistaken for a
 regression. The two bfloat16 failures in that file are the known, documented
 limit and predate today.
+
+## R5 — `make_all.py` and `figures.py` aggregate differently (please standardise)
+
+`analysis/make_all.py:85` builds the speedup-by-strategy table with
+`usable(frame)` — every passing row. `analysis/figures.py:118` builds the
+speedup plots with `latest_per_config(frame)` — one row per configuration. So
+the table in `results/summary.md` and the figures printed beside it are not
+computed the same way, and they disagree:
+
+| | raw rows (`summary.md`) | per-config (figures, report §4.1) |
+|---|---|---|
+| `sdpa` | 1.530x (n=27) | 1.584x (n=14) |
+| `optimized` | 1.351x (n=24) | 1.322x (n=15) |
+
+`results.csv` is append-only and accumulates repeated measurements of the same
+configuration, so the raw-row version weights each configuration by how many
+times it happened to be measured. `sdpa` at B=8/S=512/d=512 appears five times
+and is counted five times; a shape measured once counts once. That is a fact
+about our development history, not about the code.
+
+`optimized`'s n=24 additionally mixes an interrupted first sweep — which
+included the fp16 config that failed before the routing fix — with the
+completed one.
+
+**Request: switch `make_all.py` to `latest_per_config` so summary.md, the
+figures and the report agree.** I did not change it myself; `analysis/*` is
+yours. TECH_REPORT §4.1 currently states the per-configuration numbers, says
+why, and notes in one line that `summary.md` differs — so the report is
+internally consistent either way, but the two artefacts will keep disagreeing
+until this lands.
+
+While you are in there: `usable()` is also what makes R1 unfixable from the
+outside, since it filters to PASS before `latest_per_config` groups. Same
+function, same fix window.

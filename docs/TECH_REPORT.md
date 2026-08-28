@@ -177,11 +177,16 @@ what fraction of the wall-clock window the GPU spent with a kernel running.
 
 ![GPU busy fraction by shape](../results/figures/gpu_busy_vs_shape.png)
 
-![Kernel timeline](../results/figures/trace_timeline_small.png)
-
-**Reading it:** white space in the timeline is a GPU doing nothing. Launch
-overhead is roughly fixed per kernel and does not shrink with the shape, so it
-dominates at small shapes and vanishes at large ones.
+**No per-kernel timeline is included, and the reason is itself a finding.** A
+timeline showing white space between kernels would be the direct evidence for
+or against launch-bound behaviour, and it is the figure this section originally
+called for. We cannot produce one here. It requires device-side kernel
+intervals, which WSL2's CUPTI does not populate (§11 item 7), and it requires
+profiling the optimized path as well as the baseline, which
+`bench/profile_baseline.py` does not do — it has no strategy selector. Rather
+than show a figure built from the baseline alone on a machine that cannot time
+kernels individually, §4 Rung 3 argues the launch-overhead question from a
+kernel *count* and states plainly how far that argument reaches.
 
 `<FILL B: one sentence per shape classifying it — launch-bound / bandwidth-bound
 / compute-bound — and what that implied for which rung we did first.>`
@@ -387,13 +392,30 @@ configurations with zero accuracy failures** (min 0.984x, max 2.300x), from
 | `sdpa` (single strategy) | 1.5843 | 0.8525 | 2.4872 | 14 | **20** |
 | `baseline` (control) | 0.9937 | 0.9863 | 1.0011 | 2 | 0 |
 
-_(`<FILL B: replace with the generated per-strategy table from
-results/summary.md once it exists — the numbers above are computed directly
-from results.csv via analysis.load and should agree.>`)_
-
 Geometric mean, not arithmetic: speedups are ratios. A strategy that is 2x on
 one shape and 0.5x on another has achieved nothing on average, and only the
 geometric mean says so — the arithmetic mean would call it 1.25x.
+
+**One row per configuration.** Every aggregate in this report takes the *most
+recent* measurement of each distinct configuration
+(`analysis.load.latest_per_config`), not every passing row in `results.csv`.
+The distinction is not cosmetic. `results.csv` is append-only and accumulates
+repeated measurements of the same configuration across development, so
+B=8/S=512/d=512 appears five times for `sdpa` and once for a shape measured
+only once. Averaging over raw rows weights each configuration by **how many
+times it happened to be measured**, which is a fact about our development
+history rather than about the code. That is not a speedup, so we do not report
+it.
+
+The difference is material: over raw passing rows the same data gives `sdpa`
+1.530x (n=27) and `optimized` 1.351x (n=24), against the 1.584x and 1.322x
+above. **`results/summary.md` is generated with the raw-row aggregation and
+will therefore differ from this section**; where the two disagree, this section
+states the per-configuration figure and `summary.md` states the per-row one.
+Note also that the generated *figures* already use the per-configuration
+aggregation (`analysis/figures.py`), so summary.md's table and the plots beside
+it are not computed the same way. Standardising `analysis/make_all.py` on
+`latest_per_config` is filed as R5 in `docs/APPROVALS_NEEDED.md`.
 
 **Why 1.322x is the honest number and 1.584x is not.** The obvious objection to
 the table above is that `sdpa` looks faster than the router built on top of it.
@@ -439,18 +461,45 @@ small enough share of the work that fusing it perfectly could not buy much
 more. **This is the argument for FFN fusion as the next rung** (§11.2): at the
 shapes where our current speedup is weakest, the FFN is where the time is.
 
-**Methodology caveat — thermal drift across a long sweep.** The router measured
-**1.5581x** at S=512 where SDPA measured **1.664x** on what is, for that
-configuration, the identical code path. The router adds a handful of host-side
-integer comparisons per forward and cannot account for a 6.4% difference. The
-cause is thermal: the router's number comes from the eleventh configuration of
-a sixteen-configuration back-to-back sweep, by which point the card has been
-under sustained load long enough to drop sustained clocks, while SDPA's came
-from a shorter run. Every figure in this report is a **median** of repeated
-rounds with interleaved baseline/optimized ordering (§8), which controls
-run-to-run jitter but cannot undo a monotonic drift across a long sweep. Treat
-cross-sweep comparisons of the same configuration as carrying roughly ±6%, and
-prefer within-sweep comparisons — which is what the table above is.
+**Methodology caveat — the denominator moves between sessions.** The router
+measured **1.5581x** at B=8/S=512/d=512 where SDPA measured **1.664x** on what
+is, for that configuration, the identical code path. The router adds a handful
+of host-side integer comparisons per forward and cannot account for a 7%
+difference.
+
+Splitting the ratio into its two halves shows immediately that the difference
+is not ours. Across every passing measurement of that configuration:
+
+| | SDPA runs (n=5) | router runs (n=2) | delta |
+|---|---|---|---|
+| `baseline_median_ms` | 47.2337 | 43.7575 | **−7.36%** |
+| our own `median_ms` | 28.2095 | 28.1536 | −0.20% |
+| speedup | 1.6745 | 1.5543 | −7.18% |
+
+**Our own execution time is unchanged to within 0.2%, exactly as it should be
+for an identical code path. The entire difference is that the reference got
+7.4% faster between sessions.** The speedup fell because its denominator
+shrank.
+
+We could not attribute that shift, and say so rather than inventing a cause.
+It is *not* thermal throttling, which was the first hypothesis and the data
+refused it: the later, faster baseline runs were recorded at *lower* clocks and
+lower temperatures (2345–2373 MHz at 68 °C) than the earlier, slower ones
+(2399–2430 MHz at 70–72 °C). A card running slower-clocked and cooler while
+producing faster times is not a card that is throttling. Nor is it drift within
+a sweep: in the sixteen-configuration run, clocks rise from 2111 MHz at the
+first configuration to 2522 MHz at the last, with temperatures spanning
+59–71 °C — the machine ends the sweep faster than it starts it, having warmed
+out of an idle low-power state.
+
+The methodological consequence is the part that matters: **a speedup is only
+comparable to another speedup measured in the same process.** Within a sweep,
+baseline and optimized are interleaved round by round (§8), so both halves of
+the ratio see the same machine state and the ratio is sound. Across sessions
+the denominator is re-measured under conditions we do not control, and
+differences of this size appear without any code change. Every comparison in
+this section is within-sweep for that reason, and cross-session speedup
+comparisons should be treated as carrying roughly ±7% on this machine.
 
 ![Speedup against sequence length](../results/figures/speedup_vs_seq_len.png)
 ![Speedup against batch size](../results/figures/speedup_vs_batch.png)
@@ -612,15 +661,55 @@ Discarded rows are kept rather than deleted, and counted:
 `<FILL B: number of DISCARD:thermal rows out of the total, from
 results/summary.md.>`
 
-![Clock and temperature during one run](../results/figures/thermal_clocks_synthetic.png)
+![Clock and temperature during one run](../results/figures/thermal_clocks_8d1699b_2349_optimized_32x512x512.png)
 
-_(Replace with a real clock trace once one exists —
-`results/figures/thermal_clocks_<sha>_<time>_<strategy>_<B>x<S>x<d>.png`.)_
+_(A real trace from the shipped router at B=32, S=512, d=512 — the longest run
+in the default matrix and therefore the one with the most thermal headroom to
+lose. One of 59 such traces in `results/figures/`, one per timed run.)_
 
 The clock and temperature are drawn as two stacked panels sharing a time axis
 rather than on twin y-axes. Two scales on one plot invite the reader to read
 meaning into where the lines cross, and that crossing is an artefact of the two
 arbitrary scalings, not a fact about the GPU.
+
+### 8.1 What the thermal data actually shows
+
+The defences above were built for a failure mode that, on the evidence, did not
+materialise within a sweep. `mean_sm_clock_mhz` and `max_temp_c` are recorded
+per row in `results.csv`; across the fifteen configurations of the shipped
+router's sweep, **in execution order**:
+
+| # | configuration | mean SM clock | max temp | speedup |
+|---|---|---|---|---|
+| 1 | S=128 | 2111 MHz | 60 °C | 0.984x |
+| 2 | S=512 | 2373 MHz | 68 °C | 1.558x |
+| 3 | S=1024 | 2521 MHz | 70 °C | 1.881x |
+| 5 | B=32 | 2453 MHz | 70 °C | 1.633x |
+| 7 | d=1024 | 2401 MHz | 71 °C | 1.178x |
+| 10 | L=1 | 2018 MHz | 60 °C | 1.447x |
+| 14 | causal | 2511 MHz | 67 °C | 1.003x |
+| 15 | causal, pad 0.3 | 2522 MHz | 68 °C | 1.002x |
+
+The trend runs **upward**, not downward: 2111 MHz at the first configuration
+and 2522 MHz at the last, across a 2018–2522 MHz range with temperatures
+spanning 59–71 °C. The card *warms out of an idle low-power state* over the
+first few configurations and then holds its clock. Peak temperature never
+approaches a level that would force sustained throttling on this part, and no
+row in the entire results file carries a `DISCARD:thermal` tag.
+
+Clock also tracks the *size* of the work rather than position in the sweep —
+the two smallest-work configurations (S=128 at #1 and L=1 at #10) are the two
+lowest clocks, five configurations apart. A short run spends proportionally
+more of its window ramping.
+
+So the discard rule and the cooldowns were insurance that did not need to pay
+out here, which is worth stating rather than quietly presenting the defences as
+though they had been load-bearing. The instability that *did* bite us was a
+different one, and one none of these four defences addresses: the reference
+implementation's own timing shifted 7.4% **between sessions**, moving the
+denominator of every ratio measured against it (§4.1). Interleaving protects a
+ratio measured within one process; it does nothing for two numbers measured
+hours apart.
 
 ---
 
@@ -722,6 +811,35 @@ Stated plainly, because a report that claims no limitations is not credible.
    sequence-length trend is measured over 128–1024 rather than 128–2048.
    Getting that data point would require a smaller batch, which changes the
    configuration rather than extending the sweep.
+
+9. **`pytest -q` is not fully green, by design.** Two tests fail on a machine
+   with a GPU — `test_reduced_precision_on_gpu[bfloat16-sdpa]` and
+   `test_bfloat16_on_cpu_for_visibility[sdpa]`. **These are the documented
+   precision limit from §4 Rung 2 asserting itself, not defects.** They encode
+   the fact that the SDPA path does not reproduce the reference's bf16
+   rounding, which is the finding, and they fail because that is true. No
+   shipped configuration routes bf16 to that path: `src/optimized.py` sends
+   bf16 at every depth to the baseline, so the failing behaviour is unreachable
+   from the entry point the organizers instantiate.
+
+   We deliberately did **not** silence them with `xfail` markers. `tests/` is
+   Person B's, and more importantly a test that fails loudly is a better record
+   of a real limitation than one marked expected-to-fail and skimmed past.
+
+   Related, and the reason enforcement lives where it does: `SdpaTransformer`
+   declares `SUPPORTED_DTYPES = (float32, float16)`, but **that attribute is
+   read by nothing** — no test, no sweep, no dispatch consumes it, which is why
+   `results.csv` still contains failing bf16 rows for a strategy that nominally
+   excludes bf16. It is documentation, not a gate. A flat dtype tuple also
+   could not express the real constraint, which is dtype *and* depth (fp16 is
+   safe at one layer and unsafe at two). Both limits are therefore enforced by
+   the routing rules in `src/optimized.py`, which is the only place they can be.
+   Filed for B as R4 in `docs/APPROVALS_NEEDED.md`.
+
+   One further known flake: `test_reduced_precision_on_gpu[float16-sdpa]` fails
+   intermittently in full-suite runs and passes in isolation, which points at
+   cross-test global-precision state landing on a marginal fp16 case. Recorded
+   rather than chased.
 
 ### 11.1 Negative results
 
