@@ -98,13 +98,13 @@ alternative was publishing a downward trend that was really just heat.
 
 **Frameworks and libraries** — PyTorch (`torch.nn.functional.scaled_dot_product_attention`,
 `torch.compile`, `torch.profiler`, `torch.cuda` memory and event APIs)
-· `<FILL A: Triton, if used>` · NumPy · pandas · Matplotlib · pytest
+· Triton 3.2.0 (installed, not used — see the report's §11.1) · NumPy · pandas · Matplotlib · pytest
 
 **Platforms** — NVIDIA CUDA · WSL2 · macOS (Apple Silicon, for the CPU
 correctness suite and all analysis)
 
 **Development tools** — VS Code · Git · Jupyter · `nvidia-smi` ·
-`<FILL A: Nsight Systems, if used>`
+`torch.profiler` (Nsight Systems not used — WSL2's CUPTI does not populate device-side kernel events)
 
 **APIs / AI services** — Claude (via Claude Code) · `<FILL A: Codex or others,
 if used>`. Per-session usage log with corrections:
@@ -139,6 +139,6 @@ pinned in `docs/INTERFACE.md` and a test fails if it ever changes.
 
 ## Team
 
-- `<FILL A: name>` — optimized implementations, GPU measurement, profiling.
+- TeamClutch — optimized implementations, GPU measurement, profiling.
 - `<FILL B: name>` — measurement harness, correctness suite, dispatch layer,
   analysis and figures, report.

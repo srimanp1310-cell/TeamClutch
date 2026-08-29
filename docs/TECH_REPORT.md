@@ -76,7 +76,7 @@ The two intensity columns move in **opposite directions**. As the sequence
 grows, the explicit implementation reads and writes more bytes per FLOP and
 slides *down* toward the bandwidth-bound region; a fused implementation does the
 same arithmetic while moving less memory and climbs *away* from it. With this
-card's fp32 ridge at 62.5 FLOP/byte (§6), the baseline crosses from
+card's measured fp32 ridge at 62.9 FLOP/byte (§6), the baseline crosses from
 compute-bound into bandwidth-bound somewhere around S = 1024 — and that crossing
 is where a fused kernel should start winning by a lot rather than a little. The
 measured speedup curve in §4 either shows that shape or contradicts it, and both
@@ -93,19 +93,30 @@ one we had.
 | **Memory bandwidth** | Arithmetic intensity left of the ridge; time scales with bytes moved, not FLOPs | Roofline position (§6) | Stop moving the same bytes: fuse, avoid materializing intermediates, use a smaller dtype. |
 | **Compute** | Near peak for the dtype; right of the ridge | Achieved TFLOP/s vs peak (§6) | Better math or better tensor-core utilization. Everything else is noise. |
 
+One caveat on the first row, since we relied on it: **"GPU busy %" is a much
+weaker diagnostic than it appears** when it is computed from a `cuda.Event`
+pair spanning a timed loop, as it is here. Both events are enqueued on the
+stream, so CPU-side stalls fall inside the measurement window and a
+launch-bound run reads near 100% just as a saturated one does. §4 Rung 3 shows
+this happening — readings slightly *above* 100% are the giveaway — and pairs it
+with an independent launch-count argument rather than trusting it alone.
+Diagnosing launch overhead properly needs a device-side per-kernel timeline,
+which this environment cannot produce (§11 item 7).
+
 ---
 
 ## 2. Environment
 
 | | |
 |---|---|
-| CPU | Intel Core i7-12650HX (12th gen) |
-| GPU | NVIDIA GeForce RTX 4050 Laptop GPU — compute capability sm_89 (Ada Lovelace), **low-TGP** |
+| CPU | Intel Core i7-12650HX (12th gen, 10C/16T — 6 P-cores + 4 E-cores) |
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU (Ada Lovelace, low-TGP variant) — compute capability `sm_89` (8.9) |
 | VRAM | 6.0 GB GDDR6 |
-| OS | Windows 11 + WSL2, Ubuntu 24.04 |
+| Driver / CUDA | GeForce Game Ready 616.56, CUDA 12.4 |
+| OS | Windows 11 + WSL2, Ubuntu 24.04 LTS |
 | PyTorch | 2.6.0+cu124 |
-| Triton | 3.2.0 |
-| Install | `pip install torch --index-url https://download.pytorch.org/whl/cu124` |
+| Triton | 3.2.0 installed, **not used** — see §11 |
+| Disk | NVMe SSD |
 
 Peak figures used for the roofline in §6. These are **measured on the card**,
 not taken from the spec sheet — with a 4096×4096 matmul and a 512 MB
@@ -126,6 +137,19 @@ against the roof, and would have told us we were leaving twice as much on the
 table as we actually were.
 
 Every ridge point in this report scales directly with these numbers.
+
+**These are measured, not spec-sheet figures, and the distinction matters
+here.** This is a low-TGP laptop variant running at roughly half the datasheet
+numbers for the same die name. Quoting the datasheet would have placed the
+ridge point at more than twice its true value and made every configuration in
+§6 look compute-bound when it is not. The bandwidth figure is the one that
+lands closest to its theoretical value (91%), which is expected — streaming
+bandwidth is far easier to reach than peak FLOP/s.
+
+Both tensor-core peaks are listed for completeness and **neither is reachable
+under this problem's accuracy gate**: §4 Rung 2 shows that fp16 and bf16 both
+fail the tolerance through this reference implementation, so the 22.5 / 23.2
+TFLOP/s columns are theoretical headroom we are structurally unable to spend.
 
 A second machine — macOS on Apple Silicon, CPU only — runs the correctness
 suite, the analysis and every figure. Nothing in this report's *measurements*
@@ -179,6 +203,17 @@ wall time. It is the sounder argument anyway, for a reason specific to this
 benchmark: `cuda.Event` pairs are enqueued **on the stream**, so a CPU-side
 stall falls inside the measurement window and busy % reads near 100% almost
 regardless of what the GPU was doing.
+
+**No per-kernel timeline is included, and the reason is itself a finding.** A
+timeline showing white space between kernels would be the direct evidence for
+or against launch-bound behaviour, and it is the figure this section originally
+called for. We cannot produce one here. It requires device-side kernel
+intervals, which WSL2's CUPTI does not populate (§11 item 7), and it requires
+profiling the optimized path as well as the baseline, which
+`bench/profile_baseline.py` does not do — it has no strategy selector. Rather
+than show a figure built from the baseline alone on a machine that cannot time
+kernels individually, §4 Rung 3 argues the launch-overhead question from a
+kernel *count* and states plainly how far that argument reaches.
 
 ### 3.2 Launch overhead, measured
 
@@ -252,58 +287,92 @@ baseline is a measurement like any other and can be wrong; ours was, and it was
 caught by two tools disagreeing rather than by either one looking suspicious on
 its own.
 
-### Rung 1 — `scaled_dot_product_attention`
+### Rung 1 — `scaled_dot_product_attention` (shipped)
 
-- **Hypothesis (recorded before measuring):** attention is ~4% of FLOPs at
-  S=128 and ~40% at S=2048, so a fused attention kernel should barely move the
-  small shape and help substantially at the large one.
-- **What changed:** the explicit `QKᵀ → mask → fp32 softmax → PV` sequence
-  replaced by `F.scaled_dot_product_attention`, which never materializes the
-  `[B, H, S, S]` score matrix in HBM.
-- **Measured:** **0.899× at S=128** (slower than baseline) and **1.693× at
-  S=512**. `<FILL B: fill in S=256/1024/2048 from --matrix crossover.>`
-- **Accuracy:** fp32 passes. `max_abs = 0.0075` at the default depth — 7.5× the
-  `atol` budget, passing on the relative leg alone. See §7.2.
-- **Surprise, and the best result in the project so far:** 1.693× is *above the
-  Amdahl ceiling*.
+- **Hypothesis:** the baseline's attention is four kernels — `q @ kᵀ`, mask,
+  softmax, `probs @ v` — each reading and writing the full `[B, H, S, S]`
+  score matrix through HBM. At B=8, S=512 that matrix is 67 MB crossing the
+  memory bus on every kernel boundary. §1.1 puts the chain's arithmetic
+  intensity far left of the 62.9 FLOP/byte ridge, so it should be
+  bandwidth-bound and a fused kernel should win by more than its FLOP share
+  suggests.
+- **What changed:** `src/strategies/sdpa.py` replaces the four-kernel chain
+  with one `F.scaled_dot_product_attention` call that keeps the score tile in
+  SRAM and never materializes `[B, H, S, S]` in HBM. Mask handling is the
+  fiddly part: `valid_token_mask` is `True = keep`, which is SDPA's polarity
+  but the *opposite* of `masked_fill`'s, so it passes through uninverted.
+  SDPA rejects `is_causal=True` together with an explicit `attn_mask`, so when
+  padding and causality both apply they are folded into one bool `[B, 1, S, S]`
+  mask up front; when only causality applies, the `is_causal` flag is free.
+- **Before → after** (B=8, d=512, H=8, L=6, fp32, no mask):
 
-  Attention is 14.3% of the forward pass's FLOPs at S=512, so making it
-  infinitely fast can yield at most `1/(1 − 0.143) = 1.167×` — **if time were
-  spent in proportion to arithmetic**. We measured 1.693×. Inverting Amdahl,
-  that speedup requires attention to have been **41% of the runtime**, which is
-  **2.9× its share of the arithmetic**.
+| S | baseline | sdpa | speedup | attention, share of FLOPs | ceiling if time ∝ FLOPs |
+|---|---|---|---|---|---|
+| 128 | 7.21 ms | 8.03 ms | **0.899×** | 4.0% | 1.042× |
+| 512 | 47.22 ms | 28.25 ms | **1.671×** | 14.3% | 1.167× |
+| 1024 | 152.16 ms | 73.27 ms | **2.077×** | 25.0% | 1.333× |
 
-  A region cannot consume triple its arithmetic share unless it is waiting on
-  something other than arithmetic. This is direct evidence that the baseline's
-  attention was **memory-bound** — the cost was writing and re-reading the score
-  matrix, exactly as §1.1 predicted from the byte counts, and not the two GEMMs.
-  The prediction was recorded before the measurement and the measurement
-  overshot it in the direction the mechanism implies.
+- **Accuracy:** `max_abs_err = 0.0007` in fp32 at every shape — inside the
+  `atol` budget of 0.001 outright, without needing the relative leg.
 
-  The S=128 result is the same argument from the other side: the ceiling there
-  is only 1.042×, so there is almost nothing to win, and SDPA's own dispatch
-  overhead makes it a net loss at 0.899×. **A crossover exists between S=128 and
-  S=512, and it is the empirical justification for the dispatch layer** — not a
-  design flourish but a measured sign change. `--matrix crossover` samples
-  S ∈ {128, 192, 256, 320, 384, 512, 768, 1024} to locate it.
+- **Surprise, and the strongest result in the project: the measurement beats
+  the ceiling that arithmetic allows.**
 
-- **Saturation:** speedup settles at 1.65–1.67× beyond 2 layers — the
+  At S=512 attention is 14.3% of the forward pass's FLOPs, so making it
+  *infinitely fast* could yield at most `1/(1 − 0.143) = 1.167×`. We measured
+  1.671×. Inverting Amdahl, that speedup requires attention to have held **40%
+  of the runtime** — **2.8× its share of the arithmetic**. At S=1024 the same
+  calculation gives 52% of runtime against a 25% FLOP share, 2.1×.
+
+  A region cannot consume double or triple its arithmetic share unless it is
+  waiting on something other than arithmetic. This is direct evidence that the
+  baseline's attention was **memory-bound**: the cost was writing and re-reading
+  the `[B, H, S, S]` score matrix, exactly as §1.1 predicted from the byte
+  counts, and not the two GEMMs. The prediction was recorded before the
+  measurement, and the measurement overshot it in the direction the mechanism
+  implies.
+
+  The S=128 row is the same argument from the other side. The ceiling there is
+  only 1.042×, so there is almost nothing to win, and SDPA's own dispatch
+  overhead makes it a **net loss at 0.899×**.
+
+- **The crossover is the dispatch layer's justification.** A sign change between
+  S=128 and S=512 is not a design flourish to be argued for — it is a measured
+  fact, and it is why a single implementation is the wrong answer. §5 covers
+  what we do about it; the payoff is visible in the numbers: at S=128 the
+  routed path measures **0.994×** where raw SDPA measures 0.899×, because the
+  router sends that shape to the baseline instead.
+
+- **Saturation:** speedup settles at 1.65–1.67× beyond two layers — the
   steady-state attention share, once per-call overheads are amortized.
 
-### Rung 2 — `<FILL A: e.g. bf16>`
+### Rung 2 — reduced precision (fp16 / bf16) — **attempted, dropped**
 
-- **Hypothesis:** `<FILL A>`
-- **What changed:** `<FILL A>`
-- **Before → after:** `<FILL B>`
-- **Accuracy:** `<FILL B>` — see §7 for why reduced precision costs error budget
-  and how much margin remained.
-- **Surprise:** `<FILL A>`
+- **Hypothesis:** the card's tensor cores are rated 22.5 TFLOP/s at fp16 and
+  23.2 at bf16 against 11.0 for TF32 fp32 (§2), and the bf16 ridge sits at
+  132.7 FLOP/byte. Roughly 2x the arithmetic throughput for half the bytes
+  moved is the single largest lever available on paper.
+- **What changed:** nothing shipped. Both dtypes were run through the full
+  accuracy sweep and both failed, so no reduced-precision path exists in
+  `src/optimized.py`; the router sends bf16 at every depth and fp16 at two or
+  more layers to the baseline.
+- **Before → after:** not applicable — no configuration passed the accuracy
+  gate, and an incorrect result has no speedup.
+- **Accuracy:** this is the whole result, and the errors are not noise — every
+  one lands on an **exact integer ULP count**, which is what identifies the
+  mechanism. The reference casts softmax probabilities back to the model dtype
+  *before* `probs @ v`; SDPA's fused kernels keep them in fp32 all the way
+  through. We are therefore strictly *more* accurate than the reference and, for
+  exactly that reason, no longer reproduce its rounding.
 
-### Rung 3 — reduced precision: **abandoned, with a measurement**
+  At bf16 the worst case is **exactly 2 ULP**: bf16 has a 7-bit stored mantissa (8 with the implicit leading bit), so
+  1 ULP at magnitude ~2.17 is 2⁻⁷ · 2¹ = 0.015625, and the observed
+  `max_abs_err` is 0.03125 — a 1.44% relative error against a 1% `rtol`. It
+  fails from a single layer.
 
-This rung was planned as fp16/bf16 execution and is **dead**, not deprioritized.
-Neither format can be shipped at the benchmark's default depth. The full
-analysis is §7.1 and §7.2; the short version:
+  At fp16 the mantissa is 10 bits, so the same 2 ULP is 0.18% — inside
+  tolerance at one layer. It fails from two layers onward, once error has
+  compounded through the residual stream (§7.2).
 
 | dtype | 1 layer | 2+ layers | 6 layers (the default) |
 |---|---|---|---|
@@ -311,42 +380,250 @@ analysis is §7.1 and §7.2; the short version:
 | fp16 | **passes**, 2.020× | fails | fails |
 | bf16 | fails | fails | fails |
 
-The constraint is the tolerance against the format's granularity, not a defect
-in the kernel. Recording it as a negative result rather than omitting the rung:
-the measurement that closes a direction is worth as much as one that opens it,
-and it is what redirected the remaining effort.
+- **Consequence for the rest of the project.** With reduced precision
+  unavailable, the ~2× throughput the hardware offers in fp16/bf16 is
+  unreachable, and fusion plus shape dispatch have to carry the result on
+  their own. That raises the value of a fused LayerNorm considerably — it
+  becomes one of the few remaining sources of gain rather than a
+  nice-to-have.
 
-**Consequence for the rest of the project.** With reduced precision unavailable,
-the ~2× throughput the hardware offers in fp16/bf16 is unreachable, and fusion
-plus shape dispatch have to carry the result on their own. That raises the value
-of a fused LayerNorm (Rung 6) considerably — it is now one of the few remaining
-sources of gain rather than a nice-to-have.
+  fp16 has more mantissa and survives one layer, then compounds:
 
-### Rung 4 — `<FILL A: e.g. fused QKV projection>`
+  | depth | fp16 `max_abs_err` | verdict | bf16 `max_abs_err` | verdict |
+  |---|---|---|---|---|
+  | L=1 | 0.003906 | PASS | 0.031250 | FAIL |
+  | L=2 | 0.005859 | FAIL | 0.046875 | FAIL |
+  | L=4 | 0.007812 | FAIL | 0.062500 | FAIL |
+  | L=6 | 0.007812 | FAIL | 0.062500 | FAIL |
 
-- **Hypothesis:** `<FILL A>`
-- **What changed:** `<FILL A>` — note the parameter-naming constraint: the
-  organizers' `copy_model_weights(strict=True)` must still succeed, so the
-  fused view is built from `q_proj`/`k_proj`/`v_proj` rather than replacing them.
-- **Before → after:** `<FILL B>`
-- **Surprise:** `<FILL A>`
+  Note which bound is binding: at these magnitudes fp16 error is far above
+  `atol = 0.001`, so every element rests on the 1% relative bound, and by two
+  layers enough elements cross it. This is `rtol` failing, not `atol`.
+- **Surprise:** **the fastest kernel is structurally unreachable.** SDPA's
+  flash backend requires fp16 or bf16 — it rejects fp32 inputs outright — so
+  the only path to the flash kernel runs through the one precision regime this
+  reference implementation's rounding will not tolerate. The 22.5 / 23.2
+  TFLOP/s peaks in §2 are not headroom we failed to reach through lack of
+  effort; they are headroom the accuracy gate forbids us from spending. Closing
+  the gap would mean making the *reference* less accurate, and the reference is
+  a file we may not edit.
 
-### Rung 5 — `<FILL A>`
+### Rung 3 — `torch.compile` / CUDA graphs — **not attempted, deprioritized by measurement**
 
-`<FILL A: same structure.>`
+- **Hypothesis:** if the model were launch-bound, replacing many small kernel
+  launches with a captured graph would recover the idle gaps between them.
+- **What changed:** nothing, deliberately. This is a rung we declined to climb
+  because Rung 0's profiling said the ceiling was too low to be worth a day.
+- **Before → after:** not applicable. What ruled it out is two *independent*
+  lines of evidence, and it is worth being explicit that **neither is
+  conclusive on its own.**
 
-### Rung 6 — `<FILL A: attempted, or dropped>`
+  **Line 1 — the launch-overhead budget.** `bench/profile_baseline.py` counts
+  **67 kernel launches per forward**, identical at every profiled shape. At a
+  nominal ~5 µs of dispatch per launch that is ~0.34 ms of dispatch, against
+  measured wall times of 6.017 ms (B=8/S=128), 37.707 ms (B=8/S=512) and
+  162.472 ms (B=4/S=2048) — so **0.89% at the medium shape and 5.57% at the
+  smallest**, where the fraction is worst. Even recovering *all* of it at
+  S=512 would be worth less than 1%. The weakness of this argument is the
+  ~5 µs: it is a nominal per-launch dispatch cost, not something we measured on
+  this machine, and the conclusion scales linearly with it.
 
-`<FILL A: if dropped, say so here and move the analysis to §11. A negative
-result with a reason is worth more than an omission.>`
+  **Line 2 — the profiler's busy fraction.** The same tool reports GPU-busy of
+  101.5% / 101.2% / 100.4% across those three shapes, which reads as no idle
+  gap between kernels. **This metric is much weaker than it looks, and the
+  above-100% readings are the tell.** `profile_baseline.py:127-141` measures
+  "GPU ms" with a single `torch.cuda.Event` pair recorded around the whole
+  timed loop, then divides by CPU wall time. Both events are *enqueued on the
+  stream*, so a CPU-side stall between kernel launches falls **inside** the
+  measurement window — the end event cannot complete until everything ahead of
+  it drains, and the start event was recorded before the stall began. A
+  launch-bound run and a saturated run therefore both report near 100%, and the
+  metric cannot distinguish them. The excess over 100% is the two clocks
+  disagreeing at the window boundaries, which is precisely the signature of a
+  quantity that is not measuring what its name suggests.
+
+  Taken alone, line 2 is nearly vacuous. Taken alone, line 1 rests on an
+  assumed dispatch cost. Together they point the same way — and, importantly,
+  the one that would have to be wrong for CUDA graphs to be worth a day is
+  line 1, where the error bar is a factor on 0.89%, not the shape of the
+  argument. A ~5x error in the assumed dispatch cost would still leave the
+  medium shape under 5%.
+
+  The honest way to settle it would be a device-side per-kernel timeline
+  showing actual gaps between kernel executions. **That is exactly what WSL2's
+  CUPTI gap prevents us from producing on this machine** (§11 item 7), which is
+  why the argument rests on two indirect lines rather than one direct one.
+- **Surprise:** the profile contradicted the standard intuition that a
+  six-layer model with 67 small kernels must be launch-bound. Measuring first
+  turned a plausible day of work into a ten-minute decision. The result is
+  carried into §11.1 rather than omitted — with its caveats attached, because
+  a negative result quoted more confidently than its evidence supports is just
+  a different kind of error.
+
+### Rung 4 — shape dispatch (shipped)
+
+- **Hypothesis:** the fused path is not uniformly a win, so a router that reads
+  the shape and picks the better implementation should be worth more than any
+  single strategy — because it can keep the wins and delete the losses.
+- **What changed:** `src/optimized.py` implements the entry point the
+  organizers' script instantiates and routes each forward between the baseline
+  and SDPA paths. It sends to the baseline: causal at six or more layers,
+  `batch == 1`, `seq_len <= 128`, bf16 at any depth, fp16 at two or more
+  layers, and anything running without CUDA. Everything else goes to SDPA.
+
+  Two constraints shaped the implementation. The parameter-naming constraint
+  applies here exactly as it would to a fused QKV projection: the organizers'
+  `copy_model_weights(strict=True)` must still succeed, so the router
+  **subclasses the SDPA strategy** and inherits both `forward` implementations
+  over a single parameter set under the baseline's names, rather than holding
+  one module instance per strategy and duplicating every weight. Second, the
+  routing decision reads only `x.shape`, `x.dtype`, `x.is_cuda` and the config
+  — never `valid_token_mask`. Asking whether a mask is all-`True` costs a
+  device-to-host reduction that stalls the pipeline on every forward, so
+  padding is deliberately not an input to any rule.
+- **Before → after:** the two regressions become neutral. `seq_len = 128` moves
+  from **0.910x to 0.984x** and `batch = 1` from **0.853x to 1.010x**, while
+  the ceiling is untouched at **2.300x** (d_model = 256). Three configurations
+  that SDPA *failed* — bf16, fp16 at L=6, and causal fp32 at L=6 — now pass at
+  ~1.00x, because correctness is what the router is really buying.
+- **Surprise:** the aggregate number goes **down**, and that is the honest
+  outcome rather than a defeat. Routing to the baseline caps six of fifteen
+  configurations at 1.00x, which drags the geometric mean from SDPA's headline
+  1.584x to 1.322x. §4.1 explains why the lower number is the truthful one.
+
+### Rung 5 — not reached
+
+Not attempted. The four rungs above consumed the available time; the ranked
+list of what would come next is in §11.2, headed by FFN fusion for the reason
+§4.1 gives — the `d_model` axis says the FFN, not attention, is now the
+dominant term.
+
+### Rung 6 — not reached
+
+Not attempted. See §11.1 for the two rungs that were actively evaluated and
+rejected (reduced precision, `torch.compile`), which are negative results with
+measurements behind them rather than gaps.
 
 ### 4.1 Aggregate
 
-`<FILL B: paste the per-strategy geometric-mean table from results/summary.md.>`
+**The headline number is a geometric mean of 1.322x over fifteen
+configurations with zero accuracy failures** (min 0.984x, max 2.300x), from
+`bench/sweep.py --strategy optimized --matrix default`.
+
+| strategy | geomean | min | max | n | failing configs excluded from this mean |
+|---|---|---|---|---|---|
+| `optimized` (shipped router) | **1.3218** | 0.9840 | 2.2998 | 15 | **0** |
+| `sdpa` (single strategy) | 1.5843 | 0.8525 | 2.4872 | 14 | **20** |
+| `baseline` (control) | 0.9937 | 0.9863 | 1.0011 | 2 | 0 |
 
 Geometric mean, not arithmetic: speedups are ratios. A strategy that is 2x on
 one shape and 0.5x on another has achieved nothing on average, and only the
 geometric mean says so — the arithmetic mean would call it 1.25x.
+
+**One row per configuration.** Every aggregate in this report takes the *most
+recent* measurement of each distinct configuration
+(`analysis.load.latest_per_config`), not every passing row in `results.csv`.
+The distinction is not cosmetic. `results.csv` is append-only and accumulates
+repeated measurements of the same configuration across development, so
+B=8/S=512/d=512 appears five times for `sdpa` and once for a shape measured
+only once. Averaging over raw rows weights each configuration by **how many
+times it happened to be measured**, which is a fact about our development
+history rather than about the code. That is not a speedup, so we do not report
+it.
+
+The difference is material: over raw passing rows the same data gives `sdpa`
+1.530x (n=27) and `optimized` 1.351x (n=24), against the 1.584x and 1.322x
+above. **`results/summary.md` is generated with the raw-row aggregation and
+will therefore differ from this section**; where the two disagree, this section
+states the per-configuration figure and `summary.md` states the per-row one.
+Note also that the generated *figures* already use the per-configuration
+aggregation (`analysis/figures.py`), so summary.md's table and the plots beside
+it are not computed the same way. Standardising `analysis/make_all.py` on
+`latest_per_config` is filed as R5 in `docs/APPROVALS_NEEDED.md`.
+
+**Why 1.322x is the honest number and 1.584x is not.** The obvious objection to
+the table above is that `sdpa` looks faster than the router built on top of it.
+It is not, and the reason is in the last column.
+
+`analysis/load.py`'s `usable()` filters to `status == "PASS"` *before* taking
+any average. So a strategy's geometric mean is computed only over the
+configurations where it happened to be correct, and every configuration it
+fails silently leaves the denominator. SDPA fails 20 rows — bf16 at every
+depth, fp16 at two or more layers, and causal fp32 at six layers — and its
+1.584x is the average over what remains after those are dropped. That is not a
+speedup anyone could ship: it is the speedup of a program that is wrong on a
+third of the matrix.
+
+The router's 1.322x covers all fifteen configurations with **nothing dropped**,
+because there is nothing to drop. Where the fast path is unsafe it returns the
+baseline's own answer at ~1.00x rather than a wrong answer quickly. Comparing
+1.322 against 1.584 is therefore comparing a complete result against a filtered
+one, and the filtering is doing all of the work.
+
+Two further figures make the comparison like-for-like:
+
+- **On the nine configurations the router actually sends to SDPA, the geometric
+  mean is 1.5938x** — marginally *better* than SDPA's own filtered average,
+  because the router only hands it work it is good at. The 1.322x is that
+  number pulled toward 1.0 by six configurations where 1.0x is the correct
+  answer.
+- SDPA's 1.584x additionally still contains two stale rows (2.124x and 1.778x)
+  for causal fp32 at L=6, a configuration later shown to pass only 52% of
+  random seeds. They survive because `latest_per_config()` applies the same
+  PASS filter before choosing the newest row per configuration, so a correcting
+  FAIL row can never supersede an earlier PASS. Removing just those two rows
+  drops SDPA to **1.531x**. The correcting rows are in `results.csv`; the fix
+  to the aggregation belongs to `analysis/load.py`.
+
+**The `d_model` axis runs backwards, and that decides the next rung.** Speedup
+*falls* as the model gets wider — **2.300x at d=256, 1.558x at d=512, 1.178x at
+d=1024** — which is the opposite of the sequence-length axis. The reason is
+Amdahl's law applied to the FLOP split in Rung 1: attention is 4·B·S²·d while
+the projections and FFN together are 8·B·S·d² + 4·B·S·d·f, so growing `d`
+inflates everything *except* the term we optimized. At d=1024 attention is a
+small enough share of the work that fusing it perfectly could not buy much
+more. **This is the argument for FFN fusion as the next rung** (§11.2): at the
+shapes where our current speedup is weakest, the FFN is where the time is.
+
+**Methodology caveat — the denominator moves between sessions.** The router
+measured **1.5581x** at B=8/S=512/d=512 where SDPA measured **1.664x** on what
+is, for that configuration, the identical code path. The router adds a handful
+of host-side integer comparisons per forward and cannot account for a 7%
+difference.
+
+Splitting the ratio into its two halves shows immediately that the difference
+is not ours. Across every passing measurement of that configuration:
+
+| | SDPA runs (n=5) | router runs (n=2) | delta |
+|---|---|---|---|
+| `baseline_median_ms` | 47.2337 | 43.7575 | **−7.36%** |
+| our own `median_ms` | 28.2095 | 28.1536 | −0.20% |
+| speedup | 1.6745 | 1.5543 | −7.18% |
+
+**Our own execution time is unchanged to within 0.2%, exactly as it should be
+for an identical code path. The entire difference is that the reference got
+7.4% faster between sessions.** The speedup fell because its denominator
+shrank.
+
+We could not attribute that shift, and say so rather than inventing a cause.
+It is *not* thermal throttling, which was the first hypothesis and the data
+refused it: the later, faster baseline runs were recorded at *lower* clocks and
+lower temperatures (2345–2373 MHz at 68 °C) than the earlier, slower ones
+(2399–2430 MHz at 70–72 °C). A card running slower-clocked and cooler while
+producing faster times is not a card that is throttling. Nor is it drift within
+a sweep: in the sixteen-configuration run, clocks rise from 2111 MHz at the
+first configuration to 2522 MHz at the last, with temperatures spanning
+59–71 °C — the machine ends the sweep faster than it starts it, having warmed
+out of an idle low-power state.
+
+The methodological consequence is the part that matters: **a speedup is only
+comparable to another speedup measured in the same process.** Within a sweep,
+baseline and optimized are interleaved round by round (§8), so both halves of
+the ratio see the same machine state and the ratio is sound. Across sessions
+the denominator is re-measured under conditions we do not control, and
+differences of this size appear without any code change. Every comparison in
+this section is within-sweep for that reason, and cross-session speedup
+comparisons should be treated as carrying roughly ±7% on this machine.
 
 ![Speedup against sequence length](../results/figures/speedup_vs_seq_len.png)
 ![Speedup against batch size](../results/figures/speedup_vs_batch.png)
@@ -396,7 +673,7 @@ how many keys are won by ≥ 0.05x, and how many are ties.>`
 
 ### 5.2 What we did and did not measure
 
-**Performance is measured only on `<FILL A: sm_XX>`.** We have one GPU.
+**Performance is measured only on `sm_89`.** We have one GPU.
 
 The `sm_75` and `sm_80` paths are **correctness-tested by forced dispatch** —
 `select_strategy` accepts an explicit capability, so the selection logic for
@@ -436,6 +713,13 @@ Ridge points for this card, from the measured peaks in §2:
 | fp32, TF32 off | 5.7 TFLOP/s | 32.6 FLOP/byte |
 | fp16 | 22.5 TFLOP/s | **128.7 FLOP/byte** |
 | bf16 | 23.2 TFLOP/s | **132.7 FLOP/byte** |
+
+_(Ridge point is peak FLOP/s ÷ peak bandwidth: 11.0e12 / 174.8e9 = 62.9, and
+23.2e12 / 174.8e9 = 132.7. Both moved when the measured peaks in §2 replaced
+the spec-sheet placeholders — the bf16 ridge nearly halved, from 250 to 132.7,
+because the measured tensor-core peak is less than half the datasheet figure.
+The bf16 row is included for completeness only; §4 Rung 2 explains why no bf16
+path survives the accuracy gate.)_
 
 **The ridge point moves with precision, and it moves right.** Reduced precision
 raises the compute roof and does nothing at all for the bandwidth roof, so the
@@ -615,15 +899,55 @@ Discarded rows are kept rather than deleted, and counted:
 `<FILL B: number of DISCARD:thermal rows out of the total, from
 results/summary.md.>`
 
-![Clock and temperature during one run](../results/figures/thermal_clocks_synthetic.png)
+![Clock and temperature during one run](../results/figures/thermal_clocks_8d1699b_2349_optimized_32x512x512.png)
 
-_(Replace with a real clock trace once one exists —
-`results/figures/thermal_clocks_<sha>_<time>_<strategy>_<B>x<S>x<d>.png`.)_
+_(A real trace from the shipped router at B=32, S=512, d=512 — the longest run
+in the default matrix and therefore the one with the most thermal headroom to
+lose. One of 59 such traces in `results/figures/`, one per timed run.)_
 
 The clock and temperature are drawn as two stacked panels sharing a time axis
 rather than on twin y-axes. Two scales on one plot invite the reader to read
 meaning into where the lines cross, and that crossing is an artefact of the two
 arbitrary scalings, not a fact about the GPU.
+
+### 8.1 What the thermal data actually shows
+
+The defences above were built for a failure mode that, on the evidence, did not
+materialise within a sweep. `mean_sm_clock_mhz` and `max_temp_c` are recorded
+per row in `results.csv`; across the fifteen configurations of the shipped
+router's sweep, **in execution order**:
+
+| # | configuration | mean SM clock | max temp | speedup |
+|---|---|---|---|---|
+| 1 | S=128 | 2111 MHz | 60 °C | 0.984x |
+| 2 | S=512 | 2373 MHz | 68 °C | 1.558x |
+| 3 | S=1024 | 2521 MHz | 70 °C | 1.881x |
+| 5 | B=32 | 2453 MHz | 70 °C | 1.633x |
+| 7 | d=1024 | 2401 MHz | 71 °C | 1.178x |
+| 10 | L=1 | 2018 MHz | 60 °C | 1.447x |
+| 14 | causal | 2511 MHz | 67 °C | 1.003x |
+| 15 | causal, pad 0.3 | 2522 MHz | 68 °C | 1.002x |
+
+The trend runs **upward**, not downward: 2111 MHz at the first configuration
+and 2522 MHz at the last, across a 2018–2522 MHz range with temperatures
+spanning 59–71 °C. The card *warms out of an idle low-power state* over the
+first few configurations and then holds its clock. Peak temperature never
+approaches a level that would force sustained throttling on this part, and no
+row in the entire results file carries a `DISCARD:thermal` tag.
+
+Clock also tracks the *size* of the work rather than position in the sweep —
+the two smallest-work configurations (S=128 at #1 and L=1 at #10) are the two
+lowest clocks, five configurations apart. A short run spends proportionally
+more of its window ramping.
+
+So the discard rule and the cooldowns were insurance that did not need to pay
+out here, which is worth stating rather than quietly presenting the defences as
+though they had been load-bearing. The instability that *did* bite us was a
+different one, and one none of these four defences addresses: the reference
+implementation's own timing shifted 7.4% **between sessions**, moving the
+denominator of every ratio measured against it (§4.1). Interleaving protects a
+ratio measured within one process; it does nothing for two numbers measured
+hours apart.
 
 ---
 
@@ -632,7 +956,7 @@ arbitrary scalings, not a fact about the GPU.
 ![VRAM ceiling](../results/figures/vram_ceiling.png)
 
 The baseline materializes `[B, H, S, S]` in fp16/bf16 *plus* fp32 softmax
-intermediates — about `2e + 8` bytes per score element. On a `<FILL A: GB>` card
+intermediates — about `2e + 8` bytes per score element. On a 6.0 GB card
 that becomes the binding constraint long before compute does. Estimated peak for
 the baseline at B=8, d=512, H=8, L=6, fp32:
 
@@ -682,7 +1006,7 @@ mixing them into one average would silently understate every speedup.
 Stated plainly, because a report that claims no limitations is not credible.
 
 1. **One GPU, one architecture.** Every performance number is from
-   `<FILL A: sm_XX>`. The `sm_75`/`sm_80` paths are correctness-tested by forced
+   `sm_89` (RTX 4050 Laptop, low-TGP). The `sm_75`/`sm_80` paths are correctness-tested by forced
    dispatch and never performance-measured. We do not claim they are faster
    there.
 2. **A laptop GPU in a thermally constrained chassis.** Section 8 describes what
@@ -700,28 +1024,98 @@ Stated plainly, because a report that claims no limitations is not credible.
 6. **The dispatch table is only as dense as the sweep.** Unmeasured shapes fall
    through to a nearest neighbour, which is a guess — a well-founded one, but
    still a guess.
-7. **No device-side kernel attribution.** CUPTI does not populate kernel
-   completion records under WSL2, so GPU busy % and per-kernel time breakdowns
-   are unavailable on this setup (§3.1). `cuda.Event` timing is unaffected, so
-   every latency and speedup number is sound; what is lost is the ability to say
-   *which kernel* owned the time. The launch-count argument substitutes for the
-   launch-bound question, but a per-kernel breakdown would have been better
-   evidence and we do not have it.
-8. **No reduced precision at all.** bf16 fails at every depth (§7.1) and fp16
-   fails at two layers and beyond (§7.2), so at the benchmark's default of 6
-   layers fp32 is the only shippable dtype. The card offers roughly 2× the
-   throughput in fp16/bf16 and we cannot use any of it. This is a constraint
-   imposed by the tolerance against the formats' granularity, not a defect in
-   the kernels — and it is the single largest piece of performance left on the
-   table.
-9. `<FILL A: anything else you hit and worked around.>`
+7. **No per-kernel CUDA attribution, because of WSL2.** On this environment
+   CUPTI does not populate device-side kernel-completion events, so the
+   exported Chrome traces contain no `kernel` category entries and
+   `key_averages()` reports no Self CUDA time. Every kernel count in this
+   report — including the 67 launches per forward in §4 Rung 3 — is therefore
+   counted from `cudaLaunchKernel` calls on the **CPU-side** trace, which is
+   the number of kernels *launched* per forward rather than a device-side
+   measurement of them executing. The distinction does not affect any timing
+   result here: all latencies come from `torch.cuda.Event`, which is unaffected
+   by the CUPTI gap. What we cannot produce on this machine is a per-kernel
+   time breakdown, which is why §3's analysis is by kernel *family* and busy
+   fraction rather than a ranked kernel table. The same code on a machine with
+   working CUPTI would emit both.
+
+8. **The largest configuration in the matrix cannot run on this card at all.**
+   `src/memcheck.py` skips B=8, S=2048 because the *baseline* needs an
+   estimated 4.70 GiB against a 3.57 GiB budget (75% of free VRAM on a 6.0 GB
+   card). This is a limitation of the reference implementation on this
+   hardware, not of our implementation — the fused path's own peak at that
+   shape is far lower — but because the score is a *ratio* against the
+   baseline, a shape the baseline cannot run produces no speedup number at all.
+   S=2048 is consequently absent from every aggregate in §4.1, and the
+   sequence-length trend is measured over 128–1024 rather than 128–2048.
+   Getting that data point would require a smaller batch, which changes the
+   configuration rather than extending the sweep.
+
+9. **`pytest -q` is not fully green, by design.** Two tests fail on a machine
+   with a GPU — `test_reduced_precision_on_gpu[bfloat16-sdpa]` and
+   `test_bfloat16_on_cpu_for_visibility[sdpa]`. **These are the documented
+   precision limit from §4 Rung 2 asserting itself, not defects.** They encode
+   the fact that the SDPA path does not reproduce the reference's bf16
+   rounding, which is the finding, and they fail because that is true. No
+   shipped configuration routes bf16 to that path: `src/optimized.py` sends
+   bf16 at every depth to the baseline, so the failing behaviour is unreachable
+   from the entry point the organizers instantiate.
+
+   We deliberately did **not** silence them with `xfail` markers. `tests/` is
+   Person B's, and more importantly a test that fails loudly is a better record
+   of a real limitation than one marked expected-to-fail and skimmed past.
+
+   Related, and the reason enforcement lives where it does: `SdpaTransformer`
+   declares `SUPPORTED_DTYPES = (float32, float16)`, but **that attribute is
+   read by nothing** — no test, no sweep, no dispatch consumes it, which is why
+   `results.csv` still contains failing bf16 rows for a strategy that nominally
+   excludes bf16. It is documentation, not a gate. A flat dtype tuple also
+   could not express the real constraint, which is dtype *and* depth (fp16 is
+   safe at one layer and unsafe at two). Both limits are therefore enforced by
+   the routing rules in `src/optimized.py`, which is the only place they can be.
+   Filed for B as R4 in `docs/APPROVALS_NEEDED.md`.
+
+   One further known flake: `test_reduced_precision_on_gpu[float16-sdpa]` fails
+   intermittently in full-suite runs and passes in isolation, which points at
+   cross-test global-precision state landing on a marginal fp16 case. Recorded
+   rather than chased.
 
 ### 11.1 Negative results
 
-`<FILL A: what was tried and abandoned, and the analysis of why. Candidates from
-the plan: a Triton LayerNorm, CUDA graphs, max-autotune. If a rung was dropped
-because the measurement said it was not worth it, that measurement belongs
-here — it is evidence, not a gap.>`
+Two rungs were evaluated and rejected. Both are recorded here with the
+measurement that killed them, because a negative result with a number behind it
+is evidence about the hardware and the reference implementation, not a gap in
+the work.
+
+**Reduced precision (fp16 and bf16) — attempted, dropped on accuracy.** Full
+detail in §4 Rung 2. The short version: the reference rounds softmax
+probabilities to the model dtype before `probs @ v` and the fused kernels do
+not, so we are *more* accurate than the reference and therefore fail to
+reproduce its rounding. bf16 fails from a single layer at exactly 2 ULP
+(`max_abs_err` 0.03125 where 1 ULP at that magnitude is 0.015625); fp16 passes
+at one layer and fails from two, on `rtol` rather than `atol`. Because SDPA's
+flash backend rejects fp32 inputs, this closes off the fastest available kernel
+entirely — the 22.5 / 23.2 TFLOP/s tensor-core peaks in §2 are unreachable
+under this tolerance by construction, not by omission.
+
+**`torch.compile` and CUDA graphs — not attempted, deprioritized by profiling.**
+Full detail in §4 Rung 3, including why the evidence is weaker than it first
+appears. The load-bearing argument is the launch budget: 67 kernel launches per
+forward at a nominal ~5 µs dispatch is ~0.34 ms against 37.7 ms of wall time at
+B=8/S=512 — **0.89%**, rising to 5.57% at the smallest shape. The profiler's
+~100% GPU-busy readings point the same way but prove much less than they seem
+to, because that metric is a `cuda.Event` pair spanning the timed loop and a
+CPU-side stall falls inside the window (the 101.5% reading is the artefact that
+gives it away). We treat these as two independent and individually
+inconclusive lines rather than one strong one. What would settle it — a
+device-side per-kernel timeline showing real gaps — is unavailable here for the
+CUPTI reason in §11 item 7. Spending a day competing for a sub-1% budget would
+have cost the shape-dispatch rung, which was worth considerably more.
+
+**A note on what "dropped" means here.** Neither rung was abandoned because it
+was difficult. Both were abandoned because a measurement said the ceiling was
+lower than the cost, and in both cases the measurement is reproducible from the
+repository — the accuracy rows are in `results/results.csv`, and the profile is
+one command in `bench/profile_baseline.py`.
 
 ### 11.2 What we would do with more time
 

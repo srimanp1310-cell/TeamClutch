@@ -340,3 +340,61 @@ all of it.
 **Verification:** `pytest -q` green — 236 passed, 2 skipped, 1 xpassed.
 `make_all` runs end to end on A's real traces and results. The four measured
 ridge points reproduce A's numbers exactly (62.9 / 32.6 / 128.7 / 132.7).
+## 2026-08-28 — Rung 1: auditing a "fix" that turned out to be inert
+
+**Prompt.** A scoped TF32 kill-switch had been added around the SDPA call, and
+the causal fp32 rows in `results.csv` flipped from FAIL to PASS right after.
+But `max_abs` had gone *up* (0.00113 → 0.00124) while the verdict improved,
+which is backwards. The ask was to confirm the flip was genuine rather than a
+shape or trial-count artefact, and specifically to check whether we were passing
+by a hair on random inputs — because a judge picks their own seed.
+
+**What the audit found.** The change did nothing. Monkeypatching the context
+manager to a `nullcontext` (byte-equivalent to the pre-edit code) produced
+*bit-identical* outputs — same `max_abs`, same worst-element index, same
+reference value — across 40 seeds and both padding ratios. And
+`git diff b7f6312 b96670e -- src/strategies/sdpa.py` is empty, so the two
+commits whose rows differed contain identical strategy code.
+
+The real story: the causal fp32 L=6 config passes **21/40 seeds (52%)**. Seed
+1234 happened to land on the good side. Rerunning at a fixed seed proves
+nothing — `generate_random_case` builds its own `torch.Generator` from
+`seed + trial`, so same-seed reruns were bit-identical three times over and only
+test GPU determinism.
+
+Why the scope couldn't have worked: the error is TF32 noise in the *reference's*
+`q @ k^T` and `probs @ v`. With `allow_tf32=False` on both implementations it
+collapses to 1.9e-06 — 650x smaller. Our fp32 path selects
+`EFFICIENT_ATTENTION` (Flash and cuDNN both reject fp32 inputs), which doesn't
+use TF32 reductions at all. We were already the accurate one; the gap belongs to
+a file we must not edit.
+
+**Two hypotheses killed by measurement rather than argument.** Forcing
+`SDPBackend.MATH` to match the baseline's rounding: no help (10/20 seeds).
+SDPA folding `scale` into `q` before the matmul instead of scaling the product
+after: contributes exactly **0**, because `head_dim ** -0.5 = 0.125` is a power
+of two and commutes under any rounding. Both were plausible enough to write down
+and wrong enough to be worth recording so nobody retries them.
+
+**The lesson worth keeping.** A verdict that improves while the error metric
+worsens is not a fix — it is a coin landing the right way up. The tell was
+visible in the original FAIL line and nobody read it: `worst_index` pointed at
+feature 175 with `base=0.77` (relative error 0.14%, comfortably inside `rtol`),
+while `failed_feature_dims` said 241. The failing element was never the worst
+one. Under an OR-combined tolerance only near-zero elements can fail, so
+`max_abs` and the verdict are measuring different things and can move in
+opposite directions.
+
+**Changes.** Reverted the inert context manager. Rewrote the `sdpa.py` docstring
+with a "Known precision limits" section covering both bf16 and causal fp32 as
+one shared mechanism. Appended two correcting rows to `results.csv` (it is
+append-only) flagging the false provenance on the b96670e rows. Filed R1–R4 in
+`docs/APPROVALS_NEEDED.md` for B.
+
+**Verification.** `pytest -q` leaves the suite exactly as found: the same 2
+pre-existing bfloat16 failures, confirmed by stashing and re-running. Post-revert
+`max_abs` reproduces the pre-revert value to 11 decimal places, so the revert is
+numerically inert in the direction it should be. Note `latest_per_config()`
+still surfaces the superseded PASS rows — see R1; that is B's fix to make, and
+until it lands our speedup geomean includes two configs we know fail half the
+time.
