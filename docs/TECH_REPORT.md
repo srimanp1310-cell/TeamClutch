@@ -412,53 +412,99 @@ its own.
 
 - **Hypothesis:** if the model were launch-bound, replacing many small kernel
   launches with a captured graph would recover the idle gaps between them.
-- **What changed:** nothing, deliberately. This is a rung we declined to climb
-  because Rung 0's profiling said the ceiling was too low to be worth a day.
-- **Before → after:** not applicable. What ruled it out is two *independent*
-  lines of evidence, and it is worth being explicit that **neither is
-  conclusive on its own.**
+- **What changed:** nothing, deliberately. This is a rung we declined to climb —
+  but the margin is narrower than the first version of this section claimed.
+- **Before → after:** not applicable. What rules it out is a *single* line of
+  evidence, the launch-overhead budget. An earlier version of this section
+  offered a second line and that one has since been withdrawn; see **A retracted
+  argument** below.
 
-  **Line 1 — the launch-overhead budget.** `bench/profile_baseline.py` counts
-  **67 kernel launches per forward**, identical at every profiled shape. At a
-  nominal ~5 µs of dispatch per launch that is ~0.34 ms of dispatch, against
-  measured wall times of 6.017 ms (B=8/S=128), 37.707 ms (B=8/S=512) and
-  162.472 ms (B=4/S=2048) — so **0.89% at the medium shape and 5.57% at the
-  smallest**, where the fraction is worst. Even recovering *all* of it at
-  S=512 would be worth less than 1%. The weakness of this argument is the
-  ~5 µs: it is a nominal per-launch dispatch cost, not something we measured on
-  this machine, and the conclusion scales linearly with it.
+  **The launch-overhead budget.** `analysis/trace.py::launch_stats` counts every
+  launch record in the exported Chrome trace, matching both `cudaLaunchKernel`
+  (CUDA runtime API) and `cuLaunchKernel` (driver API). cuBLAS submits through
+  the driver path and those records are *not* nested inside the runtime-API
+  ones, so matching only `cudaLaunchKernel` undercounts launches by 42% —
+  201 records against 345. Over `PROFILED_ITERS = 3` profiled forwards:
 
-  **Line 2 — the profiler's busy fraction.** The same tool reports GPU-busy of
-  101.5% / 101.2% / 100.4% across those three shapes, which reads as no idle
-  gap between kernels. **This metric is much weaker than it looks, and the
-  above-100% readings are the tell.** `profile_baseline.py:127-141` measures
-  "GPU ms" with a single `torch.cuda.Event` pair recorded around the whole
-  timed loop, then divides by CPU wall time. Both events are *enqueued on the
-  stream*, so a CPU-side stall between kernel launches falls **inside** the
-  measurement window — the end event cannot complete until everything ahead of
-  it drains, and the start event was recorded before the stall began. A
-  launch-bound run and a saturated run therefore both report near 100%, and the
-  metric cannot distinguish them. The excess over 100% is the two clocks
-  disagreeing at the window boundaries, which is precisely the signature of a
-  quantity that is not measuring what its name suggests.
+  | shape | launches / forward | mean launch | launch share of span | verdict |
+  |---|---|---|---|---|
+  | small (B=8, S=128) | 115 | 13.73 µs | **13.75%** | undecided |
+  | medium (B=8, S=512) | 115 | 11.52 µs | 3.45% | not launch-bound |
+  | large (B=4, S=2048) | 115 | 11.05 µs | 0.80% | not launch-bound |
 
-  Taken alone, line 2 is nearly vacuous. Taken alone, line 1 rests on an
-  assumed dispatch cost. Together they point the same way — and, importantly,
-  the one that would have to be wrong for CUDA graphs to be worth a day is
-  line 1, where the error bar is a factor on 0.89%, not the shape of the
-  argument. A ~5x error in the assumed dispatch cost would still leave the
-  medium shape under 5%.
+  Measured by `analysis/trace.py::launch_stats` over
+  `logs/trace_{small,medium,large}_baseline.json` as refreshed in `c39444f`,
+  with `forwards = PROFILED_ITERS = 3`. Both the launch count and the
+  per-launch cost are measured on this machine; neither is a nominal figure.
 
-  The honest way to settle it would be a device-side per-kernel timeline
-  showing actual gaps between kernel executions. **That is exactly what WSL2's
-  CUPTI gap prevents us from producing on this machine** (§11 item 7), which is
-  why the argument rests on two indirect lines rather than one direct one.
-- **Surprise:** the profile contradicted the standard intuition that a
-  six-layer model with 67 small kernels must be launch-bound. Measuring first
-  turned a plausible day of work into a ten-minute decision. The result is
-  carried into §11.1 rather than omitted — with its caveats attached, because
-  a negative result quoted more confidently than its evidence supports is just
-  a different kind of error.
+  **Two caveats, both load-bearing.** The denominator is the *trace span*, not
+  production wall time — the profiled span for the small shape is 11.48 ms per
+  forward against a 6.017 ms unprofiled measurement, so the ratio carries
+  profiler overhead in numerator and denominator alike. And launch share is an
+  **upper bound** on launch-boundedness rather than a measurement of GPU
+  idleness: launches are asynchronous, so CPU time inside a launch call does not
+  prove the GPU was idle — it may simply be running ahead. Following the bands
+  in `analysis/trace.py`, below 5% rules launch-boundedness out and 5–15% leaves
+  it open.
+
+  **What that means, stated plainly.** The medium and large shapes are settled:
+  at 3.45% and 0.80% there is nothing worth recovering. The small shape is
+  **not** settled. At 13.75% it sits at the top of the undecided band, and an
+  earlier version of this section put it at 5.57% on the strength of an assumed
+  ~5 µs dispatch cost and a runtime-API-only count. **The case against CUDA
+  graphs at the small shape is materially weaker than that version claimed**,
+  and that is worth stating rather than defending the original number.
+
+  What keeps it off the schedule is opportunity cost, not a proof of absence.
+  The small shape is the one configuration where the shipped router declines to
+  fuse at all — §4 Rung 4 routes `seq_len <= 128` to the baseline, measured
+  0.984× — so CUDA graphs would target the shape where we currently gain
+  nothing. That cuts both ways: it is the largest remaining gap and also the
+  smallest prize. Recovering the *entire* 13.75% there would be worth ~1.16×,
+  against 2.30× already measured at B=8/S=512/d=256 and 1.88× at S=1024 from
+  attention fusion. Against a 48-hour budget a bounded ~1.16× on one shape does
+  not outrank finishing and validating the wins already in hand. That is a
+  scheduling judgement rather than a measurement, and a reasonable thing to
+  revisit with more time.
+
+  **A retracted argument.** This section previously offered a second line of
+  evidence: the profiler's GPU-busy readings of 101.5% / 101.2% / 100.4%,
+  presented as showing no idle gap between kernels. **That argument is
+  withdrawn.** The metric came from `profile_baseline.py:127-141`, a single
+  `torch.cuda.Event` pair spanning the whole timed loop — both events enqueued
+  on the stream, so a CPU-side stall falls *inside* the window and a
+  launch-bound run reads near 100% exactly as a saturated one does.
+  `analysis/trace.py::gpu_busy_fraction` now returns `NaN` on these traces and
+  every consumer prints "unmeasurable", because WSL2's CUPTI populates no
+  device-side kernel records at all (§11 item 7). A quantity our own tooling
+  reports as unmeasurable cannot support a conclusion, so the launch budget
+  stands alone rather than being propped up by it.
+
+  The honest way to settle the small shape would be a device-side per-kernel
+  timeline showing actual gaps between kernel executions. **That is exactly what
+  the WSL2 CUPTI gap prevents us from producing on this machine** (§11 item 7).
+
+  > **Open discrepancy — flagged, not resolved.** §3.2 reports these same three
+  > shapes at 8.2% / 2.9% / 1.3% with a 15.5 µs mean launch. Those figures
+  > reproduce *exactly* against the traces committed in `56d3149`, and not
+  > against the refreshed traces in `c39444f` that this section uses; the launch
+  > *count* (345 total, 115 per forward) is identical across both trace
+  > generations, so only the timings moved. Separately, §4 Rung 0.5 explains the
+  > 67 → 115 pair as a TF32 kernel-selection effect while §3.2 explains it as a
+  > runtime-versus-driver counting correction. Both of those sections are Person
+  > B's and both are left as written — reconciling them is his call, not a
+  > correction to make inside someone else's section.
+
+- **Surprise:** the intuition that a six-layer model with ~100 small kernels
+  must be launch-bound proved wrong at the two shapes that carry our speedup and
+  *undecided* at the third. The more durable lesson was about the measurement
+  rather than the result: the first version of this analysis undercounted
+  launches by 42% by matching a single API name, and assumed a per-launch cost
+  roughly a third of the measured one. Two errors in opposite directions
+  partially cancelled into a confident-looking number, and measuring both
+  quantities properly changed the verdict on one shape out of three. A negative
+  result quoted more confidently than its evidence supports is just a different
+  kind of error.
 
 ### Rung 4 — shape dispatch (shipped)
 
@@ -1028,10 +1074,10 @@ Stated plainly, because a report that claims no limitations is not credible.
    CUPTI does not populate device-side kernel-completion events, so the
    exported Chrome traces contain no `kernel` category entries and
    `key_averages()` reports no Self CUDA time. Every kernel count in this
-   report — including the 67 launches per forward in §4 Rung 3 — is therefore
-   counted from `cudaLaunchKernel` calls on the **CPU-side** trace, which is
-   the number of kernels *launched* per forward rather than a device-side
-   measurement of them executing. The distinction does not affect any timing
+   report — including the 115 launches per forward in §4 Rung 3 — is therefore
+   counted from `cudaLaunchKernel` *and* `cuLaunchKernel` records on the
+   **CPU-side** trace, which is the number of kernels *launched* per forward
+   rather than a device-side measurement of them executing. The distinction does not affect any timing
    result here: all latencies come from `torch.cuda.Event`, which is unaffected
    by the CUPTI gap. What we cannot produce on this machine is a per-kernel
    time breakdown, which is why §3's analysis is by kernel *family* and busy
@@ -1099,17 +1145,22 @@ under this tolerance by construction, not by omission.
 
 **`torch.compile` and CUDA graphs — not attempted, deprioritized by profiling.**
 Full detail in §4 Rung 3, including why the evidence is weaker than it first
-appears. The load-bearing argument is the launch budget: 67 kernel launches per
-forward at a nominal ~5 µs dispatch is ~0.34 ms against 37.7 ms of wall time at
-B=8/S=512 — **0.89%**, rising to 5.57% at the smallest shape. The profiler's
-~100% GPU-busy readings point the same way but prove much less than they seem
-to, because that metric is a `cuda.Event` pair spanning the timed loop and a
-CPU-side stall falls inside the window (the 101.5% reading is the artefact that
-gives it away). We treat these as two independent and individually
-inconclusive lines rather than one strong one. What would settle it — a
-device-side per-kernel timeline showing real gaps — is unavailable here for the
-CUPTI reason in §11 item 7. Spending a day competing for a sub-1% budget would
-have cost the shape-dispatch rung, which was worth considerably more.
+appears. The load-bearing argument is the launch budget, and it is now a single
+line of evidence rather than two: **115** kernel launches per forward at a
+**measured** mean of 11.52 µs is **3.45%** of the trace span at B=8/S=512 and
+0.80% at the largest shape, but **13.75%** at the smallest. So the medium and
+large shapes are settled and the small shape is *undecided* — at the top of the
+5–15% band, not below it. An earlier version of this section claimed 5.57%
+there from an assumed ~5 µs dispatch cost and a runtime-API-only launch count;
+both were wrong, and the corrected number weakens the case. What keeps CUDA
+graphs off the schedule is opportunity cost: full recovery at the small shape is
+worth ~1.16×, and that shape is the one the router already sends to the baseline
+(0.984×), against 2.30× already in hand from attention fusion. The GPU-busy
+readings this section once cited alongside the budget have been **withdrawn** —
+`gpu_busy_fraction` reports `NaN` on these traces (§11 item 7), and a quantity
+our own tooling calls unmeasurable cannot support a conclusion. What would
+settle it — a device-side per-kernel timeline showing real gaps — is unavailable
+here for the same CUPTI reason.
 
 **A note on what "dropped" means here.** Neither rung was abandoned because it
 was difficult. Both were abandoned because a measurement said the ceiling was
