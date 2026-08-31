@@ -1,5 +1,5 @@
 """Generate synthetic Chrome traces so `analysis/trace.py` can be built and
-tested before Person A exports a real one.
+tested before a real one is exported.
 
 Run:  python tests/fixtures/make_trace_fixtures.py
 
@@ -16,7 +16,7 @@ Fixtures produced:
   trace_halfidle.json         exactly 50% GPU-busy, by construction. The
                               acceptance test for `gpu_busy_fraction`.
   trace_{small,medium,large}_{baseline,optimized}.json
-                              the six traces Person A is asked to export. The
+                              the six traces the profiler is asked to export. The
                               baselines are launch-bound at small shapes (many
                               short kernels, large gaps) and become compute-bound
                               at large ones; the optimized traces have fewer,

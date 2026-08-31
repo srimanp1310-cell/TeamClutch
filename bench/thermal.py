@@ -22,7 +22,7 @@ a discarded measurement is evidence about the hardware, and the report counts
 them — it is just excluded from the summary statistics.
 
 Everything here is a no-op without `nvidia-smi`, so the whole module imports
-and runs on Person B's Mac; `ThermalLogger.available` is then False and
+and runs on a CPU-only machine; `ThermalLogger.available` is then False and
 `summarize` is never reached.
 """
 

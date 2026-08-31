@@ -19,22 +19,22 @@ Template:
 
 ---
 
-## 2026-08-27 — Planning: scoping Person B's half of the project
+## 2026-08-27 — Planning: scoping the measurement half of the project
 **Tool:** Claude chat
 **Prompt:** Given the organizers' `torch_transformer_benchmark.py`, the problem
 statement, and our two-person / one-GPU constraint, produce a task-by-task plan
 for the non-kernel half of the work (harness, correctness suite, dispatch,
 analysis, deliverables), with acceptance tests that run on a Mac with no GPU.
-**Output:** worked — produced `PLAN_PERSON_B.md` (Tasks 0-9, schedule, cut list).
+**Output:** worked — produced `docs/PROJECT_PLAN.md` (Tasks 0-9, schedule, cut list).
 **What I had to fix:** nothing structural at this stage; the plan's open
 questions (three proposed extra CSV columns, whether an SDPA strategy is
-CPU-safe) were deliberately left for Person A to confirm rather than guessed at.
+CPU-safe) were deliberately left to confirm against hardware rather than guessed at.
 **Verification:** n/a — planning artefact. Its assumptions get tested by Task 0's
 acceptance run.
 
 ## 2026-08-27 — Task 0: repo skeleton, contract, Claude Code rules
 **Tool:** Claude Code (Opus 5)
-**Prompt:** Read `PLAN_PERSON_B.md` sections 0 and Task 0. Create the repo
+**Prompt:** Read `docs/PROJECT_PLAN.md` sections 0 and Task 0. Create the repo
 skeleton exactly as in 0.3, write `pyproject.toml`, `src/baseline.py`,
 `src/strategies/__init__.py` with the STRATEGIES registry, `CLAUDE.md`,
 `docs/INTERFACE.md`, `.gitignore`, `requirements.txt`. Do not modify the
@@ -48,7 +48,7 @@ organizers' file. Run the acceptance commands.
   plan does **not** pick up `src.strategies` — setuptools does not descend into
   subpackages of an explicitly listed package, so `import src.strategies` failed
   from outside the repo root until `"src.strategies"` was listed separately.
-- The plan's registry skeleton has no way for Person A's strategy files to be
+- The plan's registry skeleton has no way for strategy files to be
   *imported*, so their `@register` decorators would never run and `STRATEGIES`
   would stay `{"baseline": ...}` forever. Added `_autodiscover()` over
   `pkgutil.iter_modules`, with failed imports collected into `UNAVAILABLE`
@@ -63,7 +63,7 @@ Organizers' script on CPU: `summary: PASS | max_abs=0 | max_rel=0`,
 
 ## 2026-08-27 — Tasks 1 and 2: memory pre-check, sweep harness, thermal logging
 **Tool:** Claude Code (Opus 5)
-**Prompt:** Continue with Task 2 of `PLAN_PERSON_B.md`: implement `bench/sweep.py`
+**Prompt:** Continue with Task 2 of `docs/PROJECT_PLAN.md`: implement `bench/sweep.py`
 and `bench/thermal.py` reusing the organizers' functions via `src/baseline.py`
 without editing the organizers' file; everything must run on CPU when CUDA and
 nvidia-smi are absent. Write `tests/test_sweep_cpu.py` and the synthetic clock
@@ -102,7 +102,7 @@ the synthetic clock fixtures: throttling log mean 1815 MHz vs opening 2396 MHz
 
 ## 2026-08-27 — Task 3: official-runner wrapper and the CPU correctness oracle
 **Tool:** Claude Code (Opus 5)
-**Prompt:** Read `PLAN_PERSON_B.md` Task 3. Write `bench/run_official.py` and
+**Prompt:** Read `docs/PROJECT_PLAN.md` Task 3. Write `bench/run_official.py` and
 `tests/test_strategies.py`. Confirm the "baseline" strategy passes with
 `max_abs == 0.0` across all mask/causal/shape combinations on CPU.
 **Output:** worked; two of my own test expectations were wrong and one probe
@@ -137,7 +137,7 @@ and `causal=True` fails, with the failing branch named in the test id
 ## 2026-08-27 — Task 4: analysis library, figures, roofline, dispatch table
 **Tool:** Claude Code (Opus 5), plus a data-visualisation reference for the
 palette and chart-design rules.
-**Prompt:** Read `PLAN_PERSON_B.md` Task 4. First write
+**Prompt:** Read `docs/PROJECT_PLAN.md` Task 4. First write
 `tests/fixtures/make_synthetic.py` and generate the fixture. Then implement
 `analysis/load.py`, `figures.py`, `roofline.py`, `make_all.py` and
 `tests/test_analysis.py`. Run make_all on the fixture and list the PNGs.
@@ -189,7 +189,7 @@ four defects above were found.
 
 ## 2026-08-27 — Task 5: shape and capability dispatch
 **Tool:** Claude Code (Opus 5)
-**Prompt:** Read `PLAN_PERSON_B.md` Task 5, implement `src/dispatch.py`, run the
+**Prompt:** Read `docs/PROJECT_PLAN.md` Task 5, implement `src/dispatch.py`, run the
 acceptance tests, show output.
 **Output:** worked; one real bug in my own caching, found by a test.
 **What I had to fix:**
@@ -213,7 +213,7 @@ acceptance tests, show output.
   not exist. It now distinguishes "measured this card, not this shape" from
   "never measured this card" — only the first is a performance claim.
 - Added a gate the plan does not mention: **the selected strategy must be
-  registered on this machine.** The table is generated on Person A's box; if it
+  registered on this machine.** The table is generated on the GPU machine; if it
   recommends a strategy this checkout does not have, the result is an error
   inside `forward()`. Selecting a slower strategy is always better than
   selecting one that cannot run.
@@ -228,7 +228,7 @@ the registry.
 
 ## 2026-08-27 — Task 7: profiler-trace analysis
 **Tool:** Claude Code (Opus 5)
-**Prompt:** Read `PLAN_PERSON_B.md` Task 7, implement `analysis/trace.py`, run
+**Prompt:** Read `docs/PROJECT_PLAN.md` Task 7, implement `analysis/trace.py`, run
 the acceptance test (busy fraction of a hand-built 50%-idle fixture must equal
 0.5 +/- 0.01), show output.
 **Output:** worked; one real bug in the parser and two of my own test bugs.
@@ -263,7 +263,7 @@ GPU-busy table and kernel-family breakdown into `results/summary.md`.
 
 ## 2026-08-27 — Task 8: technical report, Devpost text, video script
 **Tool:** Claude Code (Opus 5)
-**Prompt:** Read `PLAN_PERSON_B.md` Task 8. Write `docs/TECH_REPORT.md`,
+**Prompt:** Read `docs/PROJECT_PLAN.md` Task 8. Write `docs/TECH_REPORT.md`,
 `docs/DEVPOST.md` and `docs/VIDEO_SCRIPT.md` with the sections the plan and the
 problem statement require, drafting everything that does not depend on
 measurements and marking the slots that do.
@@ -271,7 +271,7 @@ measurements and marking the slots that do.
 written *now*, with no GPU.
 **What I had to fix / decide:**
 - **The central quantitative claim needed no measurement at all.** I had assumed
-  §1 would be qualitative until Person A's numbers landed. It is not: running
+  §1 would be qualitative until the measured numbers landed. It is not: running
   `analysis/roofline.py` over the sweep's configurations shows the reference
   implementation's arithmetic intensity *falling* from 64.6 to 32.3 FLOP/byte as
   sequence length goes 512 → 4096, while a fused path's *rises* from 113.8 to
@@ -284,7 +284,7 @@ written *now*, with no GPU.
   undifferentiated TODOs is how a submission ships with the word TODO in it. Every
   slot is now `<FILL A: …>` or `<FILL B: …>`, and `docs/check_ready.py` lists
   them by owner and exits non-zero while any remain — 69 outstanding right now,
-  42 of them A's. It can gate the submission checklist.
+  42 of them needing GPU measurements. It can gate the submission checklist.
 - **Structural checks rather than prose review.** `tests/test_docs.py` asserts
   the sections the *problem statement* requires actually exist (Devpost's
   "datasets used" field, the README's limitations section, the report's twelve
@@ -295,15 +295,15 @@ written *now*, with no GPU.
 `python docs/check_ready.py` correctly reports 69 outstanding placeholders and
 exits 1; on a directory with none it reports ready and exits 0.
 
-## 2026-08-28 — Integrating Person A's Rung 0 results and the bf16 finding
+## 2026-08-28 — Integrating the Rung 0 results and the bf16 finding
 **Tool:** Claude Code (Opus 5)
-**Prompt:** Person A reports SDPA passing at fp32/fp16 and failing at bf16 by
+**Prompt:** The GPU runs report SDPA passing at fp32/fp16 and failing at bf16 by
 exactly 2 ULP, asks for `SUPPORTED_DTYPES` to be honoured by the test suite, and
 supplies measured peak TFLOPS/bandwidth plus three real profiler traces. Act on
 all of it.
 **Output:** worked. Two real bugs in my own code surfaced, one of them serious.
 **What I had to fix:**
-- **`gpu_busy_fraction` returned 0.0 on A's real traces.** Under WSL2, CUPTI does
+- **`gpu_busy_fraction` returned 0.0 on the real traces.** Under WSL2, CUPTI does
   not populate device-side kernel records: the traces contain the complete
   CPU-side story and *zero* kernel events. My parser dutifully found no kernels,
   summed no busy time, and reported **0.0% GPU busy** — which reads as the most
@@ -319,13 +319,13 @@ all of it.
   available failure mode: not a crash, not a slowdown, a plausible wrong answer.
   Added `SUPPORTED_DTYPES` as a third dispatch gate alongside registration and
   capability.
-- **Verified A's ULP arithmetic before writing it into the report** rather than
+- **Verified the ULP arithmetic before writing it into the report** rather than
   taking it on trust: 1 ULP of bf16 at magnitude 2.17 is 0.015625 both
   analytically and via `torch.nextafter`, so 2 ULP is 1.44% against a 1%
   tolerance, and `rtol = 0.01` there is 1.389 ULP — tighter than the format's
   own granularity. His analysis is exactly right, and the conclusion is a
   statement about the benchmark rather than about our kernel.
-- **Corrected A's launch-count arithmetic in the other direction.** He counted 67
+- **Corrected the launch-count arithmetic in the other direction.** The first pass counted 67
   kernels/forward from `cudaLaunchKernel`. cuBLAS also submits via the *driver*
   API (`cuLaunchKernel`), and those 144 records are not nested inside the
   runtime-API ones — checked, not assumed. Real count is ~115/forward, and
@@ -333,13 +333,14 @@ all of it.
   shape's launch share is therefore 8.2%, not 2.5% — enough to move it from
   "not launch-bound" to "borderline". His conclusion survives at medium and
   large; at small it is now undecided rather than settled.
-- Replaced the roofline placeholders with A's measured peaks and made the plot
+- Replaced the roofline placeholders with the measured peaks and made the plot
   draw **one ceiling and one ridge per dtype**, since reduced precision raises
   the compute roof and leaves the bandwidth roof alone — so the ridge moves
   right and a workload can become *more* memory-bound in bf16.
 **Verification:** `pytest -q` green — 236 passed, 2 skipped, 1 xpassed.
-`make_all` runs end to end on A's real traces and results. The four measured
-ridge points reproduce A's numbers exactly (62.9 / 32.6 / 128.7 / 132.7).
+`make_all` runs end to end on the real traces and results. The four computed
+ridge points reproduce the microbenchmarked figures exactly
+(62.9 / 32.6 / 128.7 / 132.7).
 ## 2026-08-28 — Rung 1: auditing a "fix" that turned out to be inert
 
 **Prompt.** A scoped TF32 kill-switch had been added around the SDPA call, and
@@ -389,12 +390,12 @@ opposite directions.
 with a "Known precision limits" section covering both bf16 and causal fp32 as
 one shared mechanism. Appended two correcting rows to `results.csv` (it is
 append-only) flagging the false provenance on the b96670e rows. Filed R1–R4 in
-`docs/APPROVALS_NEEDED.md` for B.
+`docs/DECISIONS.md` for B.
 
 **Verification.** `pytest -q` leaves the suite exactly as found: the same 2
 pre-existing bfloat16 failures, confirmed by stashing and re-running. Post-revert
 `max_abs` reproduces the pre-revert value to 11 decimal places, so the revert is
 numerically inert in the direction it should be. Note `latest_per_config()`
-still surfaces the superseded PASS rows — see R1; that is B's fix to make, and
+still surfaces the superseded PASS rows — see R1; that is a harness-side fix, and
 until it lands our speedup geomean includes two configs we know fail half the
 time.

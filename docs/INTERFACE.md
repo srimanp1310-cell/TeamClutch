@@ -1,8 +1,8 @@
-# INTERFACE.md — the A↔B contract
+# INTERFACE.md — the internal contract
 
-Status: **DRAFT, awaiting Person A's approval in chat before Day 1.**
-Nothing below may change without telling the other person; these are the seams
-where our two halves of the repo meet.
+Status: **agreed.** These are the seams where the kernel implementations and the
+measurement harness meet. Nothing below changes without changing both sides;
+the decisions behind it are recorded in [DECISIONS.md](DECISIONS.md).
 
 ---
 
@@ -58,7 +58,7 @@ Every optimized implementation ("strategy") is a class that:
   means our weights are not provably the same weights. Do not rely on it.)
 * sets the class attribute `REQUIRES_CUDA = True` if it cannot run on CPU
   (Triton kernels, CUDA extensions). `tests/test_strategies.py` then SKIPs it
-  on Person B's Mac with a visible reason instead of reporting a false failure.
+  on a CPU-only machine with a visible reason instead of a false failure.
 
 ### Masking semantics that must be reproduced exactly
 
@@ -97,8 +97,8 @@ no edit to `__init__.py`. A submodule that fails to import on this machine
 (e.g. `import triton` on macOS) lands in `UNAVAILABLE` instead of breaking the
 registry for everyone.
 
-**Person A owns** `src/strategies/*` and `src/optimized.py`.
-**Person B owns** everything else. `src/optimized.py` defines
+`src/strategies/*` and `src/optimized.py` hold the kernel implementations;
+everything else is the measurement harness. `src/optimized.py` defines
 `UserOptimizedTransformer`, which calls `src.dispatch.select_strategy(...)`
 (Task 5) and delegates to the chosen strategy.
 
@@ -106,7 +106,7 @@ registry for everyone.
 
 ## 3b. Dispatch integration (`src/dispatch.py`)
 
-`src/optimized.py` — Person A's file — is the entry point the organizers' script
+`src/optimized.py` is the entry point the organizers' script
 instantiates. It picks a strategy per call and delegates:
 
 ```python

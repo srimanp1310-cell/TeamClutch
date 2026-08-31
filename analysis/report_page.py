@@ -479,7 +479,7 @@ def _empty(message: str, command: str) -> str:
 def _precision_table() -> str:
     """The dtype x depth verdict grid.
 
-    Hard-coded rather than derived: these come from Person A's GPU runs at a
+    Hard-coded rather than derived: these come from GPU runs at a
     depth sweep the shared results log does not yet carry. Replace with a
     derivation once `--matrix accuracy` rows land.
     """

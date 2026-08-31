@@ -1,5 +1,5 @@
 """Generate a plausible `results.csv` so the analysis layer can be built and
-tested before Person A has produced a single real measurement.
+tested before the GPU has produced a single real measurement.
 
 Run:  python tests/fixtures/make_synthetic.py
 

@@ -2,7 +2,7 @@
 """Rung 0: profile BaselineTransformer at three fixed shapes.
 
 Answers one question before any kernel gets written: where is the time going,
-and is the GPU actually busy? See docs/FOR_PERSON_A.md section 9 — do this
+and is the GPU actually busy? See docs/CONTRIBUTING.md section 9 — do this
 before writing any optimized strategy.
 
 For each shape this reports wall ms/iter, GPU ms/iter (via torch.cuda.Event,

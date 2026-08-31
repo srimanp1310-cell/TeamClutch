@@ -17,7 +17,7 @@ script accepts works here unchanged::
     python bench/run_official.py --batch-size 8 --seq-len 1024 --dtype bfloat16
     python bench/run_official.py --device cpu --seq-len 128 --causal --padding-ratio 0.3
 
-Until Person A's `src/optimized.py` exists this falls back to the "baseline"
+Until `src/optimized.py` exists this falls back to the "baseline"
 control strategy, so the file is runnable from day one — it just measures
 ~1.00x, which is the correct answer for an implementation that is a copy of the
 reference.
@@ -34,7 +34,7 @@ import bench.torch_transformer_benchmark as official  # noqa: E402
 
 
 def resolve_entry_point() -> tuple[type, str]:
-    """Person A's entry point if it exists, else the baseline control.
+    """The optimized entry point if it exists, else the baseline control.
 
     Returns the class and a human-readable description of where it came from,
     so a run can never leave you guessing which implementation was measured.

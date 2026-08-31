@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """List every unfilled placeholder in the submission documents.
 
-    python docs/check_ready.py            # report, exit 1 if anything is missing
-    python docs/check_ready.py --owner A  # only what Person A still owes
+    python docs/check_ready.py
 
 Exists because the realistic failure mode at 6pm on submission day is not a bug
-— it is shipping a report with the word TODO in it. Placeholders are written as
-`<FILL A: …>` / `<FILL B: …>` / `<FILL A/B: …>`; this finds them, groups them by
-who owes them, and exits non-zero while any remain, so it can gate a submission
-checklist.
+— it is shipping a report with the word TODO in it. Unfinished slots are written
+as `<FILL: what is missing>`; this finds them all and exits non-zero while any
+remain, so it can gate a submission checklist.
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ from typing import Dict, List, Tuple
 
 DOCS = ("TECH_REPORT.md", "DEVPOST.md", "VIDEO_SCRIPT.md", "README.md")
 
-#: `<FILL A: description>` — the owner is A, B, or A/B.
+#: `<FILL: description>`, or the older owner-tagged form still in the plan.
 PATTERN = re.compile(r"<FILL\s*(A/B|A|B)?\s*:?\s*(.*?)>", re.IGNORECASE | re.DOTALL)
 
 #: The README uses a different marker for the same idea.
@@ -57,15 +55,13 @@ def scan(root: Path) -> Dict[str, List[Tuple[int, str, str]]]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python docs/check_ready.py")
-    parser.add_argument("--owner", choices=("A", "B", "A/B"),
-                        help="show only placeholders owed by this person")
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
     args = parser.parse_args(argv)
 
     root = Path(args.root)
     found = scan(root)
 
-    wanted = args.owner.upper() if args.owner else None
+    wanted = None
     total = 0
     by_owner: Dict[str, int] = defaultdict(int)
 
@@ -75,19 +71,16 @@ def main(argv=None) -> int:
             continue
         print(f"\n{path} — {len(rows)} outstanding")
         for number, owner, description in rows:
-            print(f"  {path}:{number}  [{owner:<3}] {description}")
+            print(f"  {path}:{number}  {description}")
             by_owner[owner] += 1
             total += 1
 
     print()
     if total == 0:
-        scope = f" for {wanted}" if wanted else ""
-        print(f"No placeholders remain{scope}. Documents are ready to submit.")
+        print("No placeholders remain. Documents are ready to submit.")
         return 0
 
-    breakdown = ", ".join(f"{owner}: {count}" for owner, count in sorted(by_owner.items()))
-    print(f"{total} placeholder(s) outstanding ({breakdown}).")
-    print("Fill them, or run with --owner to see one person's share.")
+    print(f"{total} placeholder(s) outstanding. Fill them before submitting.")
     return 1
 
 

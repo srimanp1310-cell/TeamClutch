@@ -1,7 +1,7 @@
-# PLAN_PERSON_B.md — Measurement, Infrastructure & Deliverables (Mac, no GPU)
+# docs/PROJECT_PLAN.md — Measurement, Infrastructure & Deliverables (Mac, no GPU)
 
 > Drop this file in the repo root. Then, in Claude Code, say:
-> **"Read PLAN_PERSON_B.md. Implement Task N exactly as specified, then run its acceptance test."**
+> **"Read docs/PROJECT_PLAN.md. Implement Task N exactly as specified, then run its acceptance test."**
 > Do one task per session. Do not let Claude Code skip ahead.
 
 ---
@@ -14,9 +14,9 @@ The organizers give a correct-but-slow PyTorch Transformer (`torch_transformer_b
 team must fill in one method — `UserOptimizedTransformer.forward()` — with a faster implementation
 that produces the *same numbers* (every output element within `abs_err <= 0.001` OR `rel_err <= 1%`).
 The organizers' script measures both and prints `speedup = baseline_median / optimized_median`.
-Person A writes the fast implementations ("strategies": SDPA attention, bf16, torch.compile, fused
+One of us writes the fast implementations ("strategies": SDPA attention, bf16, torch.compile, fused
 QKV, maybe a Triton LayerNorm) and runs them on the only GPU we have (RTX 4050 Laptop, sm_89, 6 GB,
-inside WSL2). **Person B (this plan) builds everything that turns A's kernels into a defensible,
+inside WSL2). **This plan covers the other half: everything that turns those kernels into a defensible,
 reproducible, judged submission**: the sweep harness, memory pre-check, correctness test suite,
 the strategy-dispatch table, all figures, the report, README, AI-usage log, Devpost text, video script.
 
@@ -55,7 +55,7 @@ the strategy-dispatch table, all figures, the report, README, AI-usage log, Devp
 ```
 transformer-gpu-opt/
 ├── README.md                     ★ required deliverable
-├── PLAN_PERSON_B.md              ★ this file
+├── docs/PROJECT_PLAN.md              ★ this file
 ├── CLAUDE.md                     ★ short rules file for Claude Code (Task 0)
 ├── pyproject.toml                ★ makes `src`, `bench`, `analysis` importable; pytest config
 ├── requirements.txt              ★
@@ -476,10 +476,10 @@ Fix the README, not the reader. Then submit Devpost (Task 8 text, repo link, pub
 
 ## Claude Code prompts (copy/paste, one per session)
 
-- **Task 0:** "Read PLAN_PERSON_B.md sections 0 and Task 0. Create the repo skeleton exactly as in 0.3, write pyproject.toml, src/baseline.py, src/strategies/__init__.py with the STRATEGIES registry, CLAUDE.md, docs/INTERFACE.md, .gitignore, requirements.txt. Do not modify bench/torch_transformer_benchmark.py. Run the acceptance commands and show me the output."
-- **Task 2:** "Read PLAN_PERSON_B.md Task 2. Implement bench/sweep.py and bench/thermal.py reusing the organizers' functions from src/baseline.py without editing the organizers' file. Everything must run on CPU when CUDA/nvidia-smi are absent. Write tests/test_sweep_cpu.py and the synthetic clock fixture, run pytest, and show me the resulting /tmp/r.csv header and rows."
-- **Task 3:** "Read PLAN_PERSON_B.md Task 3. Write bench/run_official.py and tests/test_strategies.py. Confirm the 'baseline' strategy passes with max_abs == 0.0 across all mask/causal/shape combinations on CPU."
-- **Task 4:** "Read PLAN_PERSON_B.md Task 4. First write tests/fixtures/make_synthetic.py and generate the fixture. Then implement analysis/load.py, figures.py, roofline.py, make_all.py and tests/test_analysis.py. Run make_all on the fixture and list the PNGs produced."
-- **Task 5 / 7 / 8:** same pattern: "Read PLAN_PERSON_B.md Task N, implement, run acceptance, show output."
+- **Task 0:** "Read docs/PROJECT_PLAN.md sections 0 and Task 0. Create the repo skeleton exactly as in 0.3, write pyproject.toml, src/baseline.py, src/strategies/__init__.py with the STRATEGIES registry, CLAUDE.md, docs/INTERFACE.md, .gitignore, requirements.txt. Do not modify bench/torch_transformer_benchmark.py. Run the acceptance commands and show me the output."
+- **Task 2:** "Read docs/PROJECT_PLAN.md Task 2. Implement bench/sweep.py and bench/thermal.py reusing the organizers' functions from src/baseline.py without editing the organizers' file. Everything must run on CPU when CUDA/nvidia-smi are absent. Write tests/test_sweep_cpu.py and the synthetic clock fixture, run pytest, and show me the resulting /tmp/r.csv header and rows."
+- **Task 3:** "Read docs/PROJECT_PLAN.md Task 3. Write bench/run_official.py and tests/test_strategies.py. Confirm the 'baseline' strategy passes with max_abs == 0.0 across all mask/causal/shape combinations on CPU."
+- **Task 4:** "Read docs/PROJECT_PLAN.md Task 4. First write tests/fixtures/make_synthetic.py and generate the fixture. Then implement analysis/load.py, figures.py, roofline.py, make_all.py and tests/test_analysis.py. Run make_all on the fixture and list the PNGs produced."
+- **Task 5 / 7 / 8:** same pattern: "Read docs/PROJECT_PLAN.md Task N, implement, run acceptance, show output."
 
 After every session: append an entry to `docs/AI_USAGE.md`, run `pytest -q`, commit, push.

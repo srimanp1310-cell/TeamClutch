@@ -63,8 +63,8 @@ DEFAULT_TABLE_PATH = "results/dispatch_table.json"
 #: What to run when there is no GPU at all.
 #:
 #: `"baseline"` is the safe answer and the current one. Whether an SDPA path is
-#: numerically safe on CPU is an open question for Person A
-#: (docs/APPROVALS_NEEDED.md 1.2); until it is answered, a wrong answer here
+#: numerically safe on CPU was left open
+#: (docs/DECISIONS.md 1.2); until it is answered, a wrong answer here
 #: would fail the correctness oracle on the only machine that runs it in CI.
 CPU_FALLBACK_STRATEGY = "baseline"
 

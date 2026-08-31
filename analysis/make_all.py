@@ -44,7 +44,7 @@ DEFAULT_PAGE = "results/report.html"
 def _load_traces(logs_dir: Path) -> dict:
     """`logs/trace_<shape>_<variant>.json` -> {"<shape>_<variant>": frame}.
 
-    Person A exports these from `torch.profiler`; the filename carries the
+    These are exported from `torch.profiler` on the GPU machine; the filename carries the
     labels, so nothing has to be configured here.
     """
     traces = {}

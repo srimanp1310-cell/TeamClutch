@@ -29,7 +29,7 @@ from src.dispatch import (
 RESULTS_FIXTURE = Path(__file__).parent / "fixtures" / "results_synthetic.csv"
 
 #: What the synthetic sweep "registered". Passed explicitly so these tests do
-#: not depend on which strategies Person A happens to have written yet.
+#: not depend on which strategies happen to be implemented yet.
 AVAILABLE = {name: None for name in
              ("baseline", "sdpa", "bf16", "compiled", "fused_qkv")}
 
@@ -286,7 +286,7 @@ def test_dtype_and_capability_gates_compose(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_an_unregistered_strategy_is_never_selected(table_path):
-    """The table is generated from Person A's machine; this one may not have
+    """The table is generated on the GPU machine; a given checkout may not have
     every strategy yet. Recommending a class that does not exist here would be
     an AttributeError inside forward()."""
     only_baseline = {"baseline": None}

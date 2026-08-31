@@ -119,7 +119,7 @@ no pretrained weights.
 ## Links
 
 - **Repository:** <https://github.com/srimanp1310-cell/TeamClutch>
-- **Demo video (YouTube, public):** `<FILL A: URL>`
+- **Demo video (YouTube, public):** `<FILL: URL — add after uploading the demo video>`
 
 ## Try it yourself
 
@@ -139,6 +139,6 @@ pinned in `docs/INTERFACE.md` and a test fails if it ever changes.
 
 ## Team
 
-- TeamClutch — optimized implementations, GPU measurement, profiling.
-- `<FILL B: name>` — measurement harness, correctness suite, dispatch layer,
+- **De Xun** — optimized kernel implementations, GPU measurement, profiling.
+- **K Sriman Preeth** — measurement harness, correctness suite, dispatch layer,
   analysis and figures, report.

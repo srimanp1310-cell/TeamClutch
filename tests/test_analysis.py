@@ -1,6 +1,6 @@
 """Task 4 acceptance: the analysis layer, on the synthetic fixture.
 
-The fixture exists so this whole layer is testable before Person A has produced
+The fixture exists so this whole layer is testable before the GPU has produced
 a single real measurement. What is checked here is not "does it plot" but
 "does it plot the truth": that non-measurements never reach a mean, that a
 re-run supersedes its predecessor, that the geometric mean is the geometric

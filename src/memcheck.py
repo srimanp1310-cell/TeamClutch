@@ -113,8 +113,8 @@ def _system_available_memory_bytes() -> int:
     """Free system RAM, or a conservative 8 GiB if the OS will not say.
 
     macOS does not expose `SC_AVPHYS_PAGES`, so this returns the fallback there.
-    That is fine: on Person B's Mac the number that matters is the *estimate*,
-    which is device-independent. The real free-VRAM figure comes from Person A's
+    That is fine: on a CPU-only machine the number that matters is the *estimate*,
+    which is device-independent. The real free-VRAM figure comes from the GPU
     machine via the CUDA branch below.
     """
     try:

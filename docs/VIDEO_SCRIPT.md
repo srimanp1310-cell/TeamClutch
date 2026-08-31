@@ -216,7 +216,7 @@ if the log has grown.
 | router geomean | 1.322x, n=15, min 0.984x | `latest_per_config`, strategy `optimized` |
 | sdpa geomean | 1.584x, n=14 | same, strategy `sdpa` |
 | bf16 error | exactly 2 ULP = 1.44% vs 1% rtol | `docs/TECH_REPORT.md` §7.1 |
-| causal false positive | 21/40 seeds (52%) | `docs/APPROVALS_NEEDED.md` R2 |
+| causal false positive | 21/40 seeds (52%) | `docs/DECISIONS.md` R2 |
 | test suite | 286 passed, 5 skipped | `pytest` |
 
 **Not spoken, deliberately.** Thermal discards: **zero** runs were discarded —
