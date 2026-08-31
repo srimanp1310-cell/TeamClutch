@@ -1,8 +1,10 @@
 # Transformer GPU Kernel Optimization — TikTok TechJam 2026, Task 3
 
-> **Status: skeleton (Task 0 complete).** Sections marked _TODO_ are filled in
-> during the sprint — measured numbers land here from `results/results.csv`, and
-> the environment block is supplied by Person A from the GPU machine.
+> **Status: complete and reproducible from a clean clone.** Verified end to end
+> on 2026-08-31: install, `pytest` (286 passed, 5 skipped), the control sweep,
+> the organizers' own script, and full figure regeneration. Measured numbers
+> live in `results/results.csv` (append-only) and are summarised in
+> `results/summary.md` and `results/report.html`.
 
 ## Project overview
 
@@ -21,11 +23,27 @@ implementation per input shape (which the problem statement explicitly invites).
 
 ## Environment
 
-_TODO (Person A): CPU, GPU, VRAM, driver version, WSL2 version, PyTorch, Triton,
-CUDA. Plus peak FP32/BF16 TFLOPS and memory bandwidth for the roofline analysis._
+All measured results come from one machine:
 
-Person B's machine (harness development, CPU tests, all analysis):
-macOS on Apple Silicon, PyTorch 2.13.0, CPU-only (`torch.cuda.is_available() == False`).
+| | |
+|---|---|
+| CPU | Intel Core i7-12650HX (12th gen) |
+| GPU | NVIDIA GeForce RTX 4050 Laptop GPU (Ada Lovelace, low-TGP) — `sm_89` |
+| VRAM | 6.0 GB GDDR6 |
+| Driver / CUDA | GeForce Game Ready 616.56, CUDA 12.4 |
+| OS | Windows 11 + WSL2, Ubuntu 24.04 LTS |
+| PyTorch | 2.6.0+cu124 |
+| Triton | 3.2.0 installed, not used |
+
+Measured peaks used for the roofline — **measured on the card, not spec sheet**,
+which for this low-TGP part is roughly half the published figures: fp32 with
+TF32 on **11.0 TFLOP/s** (the benchmark defaults to `--allow-tf32`), fp32 TF32
+off 5.7, fp16 22.5, bf16 23.2, memory bandwidth **174.8 GB/s**. Full table and
+the reasoning in [docs/TECH_REPORT.md](docs/TECH_REPORT.md) §2.
+
+The harness, CPU test suite and all analysis also run on macOS with no GPU
+(`torch.cuda.is_available() == False`); GPU-only paths degrade rather than
+crash.
 
 ## Setup
 
@@ -52,22 +70,65 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-_TODO (Person A): confirm the exact index URL / Triton version used._
+The cu124 index URL above is the one all measured results were produced with;
+it installs `torch 2.6.0+cu124` and pulls `triton 3.2.0` as a dependency. Run
+`pip install -r requirements.txt` **after** the CUDA torch — it lists a bare
+`torch`, which pip then leaves alone because the requirement is already
+satisfied. Installing it first would give you a CPU or default-CUDA build.
 
 ## Reproduce
 
 ```bash
-pytest -q                                                    # correctness oracle, CPU, no GPU needed
-python bench/sweep.py --strategy baseline --matrix quick     # control: every speedup must be ~1.00x
-python bench/run_official.py --batch-size 8 --seq-len 1024   # the organizers' own script, our class injected
+pytest                             # correctness oracle — CPU, no GPU needed, ~25 s
+python bench/sweep.py --strategy baseline --matrix quick     # GPU. control: every speedup ~1.00x
+python bench/run_official.py --batch-size 8 --seq-len 1024   # GPU. organizers' script, our class injected
 python -m src.memcheck --batch 8 --seq-len 4096              # will this config OOM? (no GPU needed)
-python -m analysis.make_all                                  # regenerate every figure and results/summary.md
-                                                             # (picks up logs/trace_*.json and logs/clocks_*.csv automatically)
+python -m analysis.make_all                                  # regenerate every figure, summary.md, report.html
+                                                             # (picks up logs/trace_*.json and logs/clocks_*.csv)
 ```
 
-To see what the figures look like before any GPU run exists, render them from
-the synthetic fixture into a scratch directory (the summary it writes is stamped
-SYNTHETIC, and nothing lands in `results/`):
+**Run `pytest`, not `pytest -q`.** `pyproject.toml` already sets `addopts = "-q"`,
+so adding another `-q` becomes `-qq` and suppresses the summary line — you get a
+wall of dots and no verdict. Plain `pytest` prints the count. Expected on a clean
+clone: **286 passed, 5 skipped**, no failures. Four of the skips are the bfloat16
+cases, skipped with a visible reason because the strategies declare
+`SUPPORTED_DTYPES` without bf16 (see [docs/INTERFACE.md](docs/INTERFACE.md) §5.1);
+the fifth is a thermal-logging path that only runs on a machine without
+`nvidia-smi`.
+
+> **`bench/sweep.py` requires a completely clean tree — including untracked
+> files.** It refuses to run otherwise, because a row it cannot tie to a commit
+> is a row nobody can reproduce. `git_is_dirty()` shells out to a bare
+> `git status --porcelain`, so **untracked files count**. Two consequences bite
+> in the documented order above:
+>
+> 1. **`pytest` blocks the next sweep.** The suite regenerates the *tracked* file
+>    `results/report.html` (`tests/test_analysis.py` writes to the real
+>    `results/` rather than a temp directory).
+> 2. **A sweep blocks the next sweep.** Each run appends to `results/results.csv`
+>    and drops untracked `logs/clocks_*.csv` thermal traces.
+>
+> So before each sweep, either commit what the previous step produced — which is
+> the intended workflow, since the logs are evidence for the rows — or reset:
+>
+> ```bash
+> git checkout -- results/report.html          # undo what pytest regenerated
+> git status --porcelain                       # must print nothing before sweeping
+> ```
+>
+> `--allow-dirty` runs anyway and tags the rows `dirty`. Use it for a throwaway
+> measurement, never for one you intend to quote.
+>
+> Both are open defects rather than intended design: a test should not write into
+> `results/`, and untracked output should not count toward reproducibility of the
+> code that produced a row.
+
+`python -m src.memcheck` **exits non-zero when a config will not fit** — that is
+the answer, not a failure. Do not run the block above under `set -e`.
+
+To see what the figures look like before any GPU run exists, render them from the
+synthetic fixture into a scratch directory. The summary it writes is stamped
+SYNTHETIC:
 
 ```bash
 python -m analysis.make_all --results tests/fixtures/results_synthetic.csv \
@@ -75,13 +136,23 @@ python -m analysis.make_all --results tests/fixtures/results_synthetic.csv \
   --dispatch /tmp/preview/dispatch.json
 ```
 
-Commands that require a GPU are marked _GPU/WSL2 only_ where they appear.
-Everything above except `run_official.py` at large shapes runs on macOS CPU.
+> **This command still overwrites `results/report.html`.** The HTML page has no
+> output override, so it is written to the default path even when every other
+> output is redirected — leaving the real results page showing invented fixture
+> numbers. Restore it afterwards:
+>
+> ```bash
+> git checkout -- results/report.html
+> ```
 
-Verify the organizers' file was never modified:
+Everything above except the two commands marked GPU runs on macOS CPU.
+
+Verify the organizers' file was never modified — the hash must match the one
+pinned in [docs/INTERFACE.md](docs/INTERFACE.md):
 
 ```bash
-shasum -a 256 bench/torch_transformer_benchmark.py   # must match docs/INTERFACE.md
+sha256sum bench/torch_transformer_benchmark.py    # Linux / WSL2
+shasum -a 256 bench/torch_transformer_benchmark.py  # macOS
 ```
 
 ## Viewing the results page
@@ -128,12 +199,61 @@ the sweep command that would fill it.
 
 ## Results
 
-_TODO: `results/summary.md` table (geometric-mean speedup, min, max, n) and the
-headline figure, pasted here once the sweep has real rows._
+The single most direct number, from the organizers' own script on a clean clone
+(`run_official.py --batch-size 8 --seq-len 1024`, fp32, 6 layers):
+
+```
+baseline : median=135.4051 ms | throughput= 60,500 token/s
+optimized: median= 72.7521 ms | throughput=112,602 token/s
+speedup  : 1.861x    accuracy: PASS, max_abs=0.00068 over 5 trials
+```
+
+Across the measured shape matrix, by sequence length (median speedup per
+configuration, from `results/summary.md`):
+
+| seq_len | baseline (control) | sdpa | optimized (shipped router) |
+|---|---|---|---|
+| 128 | 0.99x | 0.91x | 0.98x |
+| 512 | 1.00x | 1.65x | 1.45x |
+| 1024 | — | 2.08x | 1.88x |
+
+The `baseline` row is the control: an unmodified copy of the reference model,
+which must measure ~1.00x or the measuring rig itself is wrong.
+
+The shipped `optimized` router is deliberately *not* the fastest row everywhere —
+it falls back to the baseline at shapes where fusion loses (S=128, batch 1) and
+wherever a dtype or depth would breach the accuracy budget. That is why its
+geometric mean sits below `sdpa`'s while its worst case does not regress.
+
+**One caveat on the aggregate.** `results/summary.md` reports its headline
+geometric means over raw log rows while the figures beside it aggregate one row
+per configuration, so the two disagree (1.530x vs 1.584x for `sdpa`).
+`results.csv` is append-only and a configuration measured five times is counted
+five times, which is a fact about our development history rather than the code —
+so the per-configuration figures are the ones to quote.
+[docs/TECH_REPORT.md](docs/TECH_REPORT.md) §4.1 explains the difference; the
+divergence is a known open item.
 
 ## Limitations and what we would do with more time
 
-_TODO — written from measured evidence, including negative results._
+Written up in full, with the measurements behind each one, in
+[docs/TECH_REPORT.md](docs/TECH_REPORT.md) §11. The short version:
+
+- **Reduced precision is unreachable, not unexplored.** bf16 fails the tolerance
+  at every depth and fp16 from two layers up, because the reference rounds
+  softmax probabilities to the model dtype before `probs @ v` and a fused kernel
+  does not — we are *more* accurate and therefore fail to reproduce its rounding.
+  That puts the card's 22.5 / 23.2 TFLOP/s tensor-core peaks out of reach by
+  construction. The largest single piece of performance left on the table.
+- **No device-side kernel timeline.** WSL2's CUPTI populates no kernel-completion
+  events, so GPU-busy percentages are reported as unmeasurable rather than
+  guessed, and the launch-overhead argument rests on a CPU-side launch count.
+- **CUDA graphs are undecided at the smallest shape**, not ruled out — 13.75% of
+  trace span goes into launch calls at B=8/S=128. Deprioritized on opportunity
+  cost against a 2.30x win already measured elsewhere, not on proof of absence.
+- **S=2048 is skipped by the memory pre-check** on a 6 GB card, so it drops out
+  of every aggregate — the score is a ratio and the baseline cannot produce a
+  denominator there.
 
 ## Team contributions
 
