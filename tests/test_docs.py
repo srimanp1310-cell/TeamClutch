@@ -9,6 +9,7 @@ kind of thing that gets deleted during a late edit and never noticed.
 from __future__ import annotations
 
 import re
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -162,6 +163,37 @@ def test_readme_has_every_required_section(heading):
 # ---------------------------------------------------------------------------
 # the readiness checker
 # ---------------------------------------------------------------------------
+
+def test_check_ready_sees_placeholders_that_wrap_across_lines():
+    """The regression this exists for.
+
+    A per-line scan misses any slot whose opening and closing markers land on
+    different lines, and most of them do. It then reports "ready" while real
+    gaps remain — the exact outcome the script exists to prevent, and a silent
+    one.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_ready_wrap", DOCS / "check_ready.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    root = Path(tempfile.mkdtemp())
+    (root / "docs").mkdir()
+    (root / "docs" / "TECH_REPORT.md").write_text(
+        "# T\n\nOne slot, wrapped over two lines:\n\n"
+        "`<FILL: the worst error across every passing run, and\n"
+        "the margin to each threshold>`\n"
+    )
+    found = module.scan(root)
+    assert found, "a wrapped placeholder must still be found"
+    entries = found["docs/TECH_REPORT.md"]
+    assert len(entries) == 1
+    assert "worst error" in entries[0][2]
+    assert module.main(["--root", str(root)]) == 1
+
 
 def test_check_ready_finds_the_outstanding_placeholders():
     import importlib.util

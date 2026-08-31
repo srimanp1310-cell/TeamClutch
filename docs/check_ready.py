@@ -28,28 +28,38 @@ TODO_PATTERN = re.compile(r"_TODO\b(.*?)_", re.DOTALL)
 
 
 def scan(root: Path) -> Dict[str, List[Tuple[int, str, str]]]:
-    """{relative path: [(line number, owner, description), ...]}"""
+    """{relative path: [(line number, owner, description), ...]}
+
+    Scans the whole file rather than line by line. Placeholders wrap: a slot
+    written as
+
+        `<FILL: worst max_abs_err across all passing runs, and the
+        margin to each threshold>`
+
+    has no line containing both the opening and the closing marker, so a
+    per-line scan silently misses it. That is the worst possible failure for
+    this script — it reports "ready" while real gaps remain, which is the one
+    outcome it exists to prevent.
+    """
     found: Dict[str, List[Tuple[int, str, str]]] = defaultdict(list)
     for name in DOCS:
         path = root / "docs" / name if name != "README.md" else root / name
         if not path.exists():
             continue
-        for number, line in enumerate(path.read_text().splitlines(), start=1):
-            for owner, description in PATTERN.findall(line):
-                # `<FILL A: …>` with a literal ellipsis is the *legend* — the
-                # sentence in each document explaining the convention — not a
-                # slot anyone has to fill. Counting it means this script can
-                # never reach zero, which would make its exit code useless as a
-                # submission gate.
-                if description.strip() in ("…", "...", ""):
-                    continue
-                found[str(path.relative_to(root))].append(
-                    (number, (owner or "?").upper(), " ".join(description.split())[:90])
-                )
-            for description in TODO_PATTERN.findall(line):
-                found[str(path.relative_to(root))].append(
-                    (number, "?", "TODO" + " ".join(description.split())[:86])
-                )
+        text = path.read_text()
+        for match in PATTERN.finditer(text):
+            owner, description = match.group(1), match.group(2)
+            if description.strip() in ("\u2026", "...", ""):
+                continue
+            number = text.count("\n", 0, match.start()) + 1
+            found[str(path.relative_to(root))].append(
+                (number, (owner or "?").upper(), " ".join(description.split())[:90])
+            )
+        for match in TODO_PATTERN.finditer(text):
+            number = text.count("\n", 0, match.start()) + 1
+            found[str(path.relative_to(root))].append(
+                (number, "?", "TODO" + " ".join(match.group(1).split())[:86])
+            )
     return dict(found)
 
 
