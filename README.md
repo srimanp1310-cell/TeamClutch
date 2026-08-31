@@ -136,14 +136,22 @@ python -m analysis.make_all --results tests/fixtures/results_synthetic.csv \
   --dispatch /tmp/preview/dispatch.json
 ```
 
-> **This command still overwrites `results/report.html`.** The HTML page has no
-> output override, so it is written to the default path even when every other
-> output is redirected — leaving the real results page showing invented fixture
-> numbers. Restore it afterwards:
+> **As written, this command overwrites `results/report.html`.** It redirects
+> `--figures`, `--summary` and `--dispatch` but not the HTML page, so the page
+> is written to its default path and the real results page ends up showing
+> invented fixture numbers. `make_all` does have a `--page` flag — pass it too:
 >
 > ```bash
-> git checkout -- results/report.html
+> python -m analysis.make_all --results tests/fixtures/results_synthetic.csv \
+>   --logs tests/fixtures --figures /tmp/preview --summary /tmp/preview/summary.md \
+>   --dispatch /tmp/preview/dispatch.json --page /tmp/preview/report.html
 > ```
+>
+> If you already ran it without `--page`: `git checkout -- results/report.html`.
+>
+> `tests/test_analysis.py` has the same omission on all four of its `make_all`
+> calls, so **running the test suite also overwrites the page with fixture
+> data**. That one is an open defect rather than a documentation gap.
 
 Everything above except the two commands marked GPU runs on macOS CPU.
 
@@ -225,14 +233,16 @@ it falls back to the baseline at shapes where fusion loses (S=128, batch 1) and
 wherever a dtype or depth would breach the accuracy budget. That is why its
 geometric mean sits below `sdpa`'s while its worst case does not regress.
 
-**One caveat on the aggregate.** `results/summary.md` reports its headline
-geometric means over raw log rows while the figures beside it aggregate one row
-per configuration, so the two disagree (1.530x vs 1.584x for `sdpa`).
-`results.csv` is append-only and a configuration measured five times is counted
-five times, which is a fact about our development history rather than the code —
-so the per-configuration figures are the ones to quote.
-[docs/TECH_REPORT.md](docs/TECH_REPORT.md) §4.1 explains the difference; the
-divergence is a known open item.
+**How the aggregates are computed.** Every summary statistic takes one row per
+configuration — the most recent verdict for each — rather than every passing row
+in the log. `results.csv` is append-only, so averaging raw rows would weight a
+configuration by how many times it happened to be re-swept, which is a fact
+about our development history rather than about the code. A configuration whose
+latest verdict is a FAIL drops out entirely rather than reverting to its last
+passing number. `summary.md`, `report.html` and the figures are all computed
+this way and agree with each other.
+[docs/TECH_REPORT.md](docs/TECH_REPORT.md) §4.1 has the detail, including why
+the router's 1.322x is a more honest number than `sdpa`'s 1.531x.
 
 ## Limitations and what we would do with more time
 

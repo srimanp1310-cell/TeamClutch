@@ -151,9 +151,9 @@ python bench/run_official.py --batch-size 8 --seq-len 1024
 > geometric mean. Zero accuracy failures. Worst case nought-nine-eight-four —
 > nothing we ship is meaningfully slower than the baseline.
 >
-> Now, fused attention alone averages one-point-five-eight. That looks better.
+> Now, fused attention alone averages one-point-five-three. That looks better.
 > It isn't. That average only counts the configurations where fused attention is
-> *correct* — drop the ones it gets wrong and of course the survivors look good.
+> *correct* — drop the nine it gets wrong and of course the survivors look good.
 >
 > One-point-three-two includes the cases we had to route around. That's the
 > number we'll stand behind."
@@ -214,7 +214,7 @@ if the log has grown.
 | sdpa at S=128 | 0.910x | same |
 | attention FLOP share | 4.0% at S=128, 40.0% at S=2048 | `analysis/roofline.py::attention_flop_share` |
 | router geomean | 1.322x, n=15, min 0.984x | `latest_per_config`, strategy `optimized` |
-| sdpa geomean | 1.584x, n=14 | same, strategy `sdpa` |
+| sdpa geomean | 1.531x, n=12 | same, strategy `sdpa` |
 | bf16 error | exactly 2 ULP = 1.44% vs 1% rtol | `docs/TECH_REPORT.md` §7.1 |
 | causal false positive | 21/40 seeds (52%) | `docs/DECISIONS.md` R2 |
 | test suite | 286 passed, 5 skipped | `pytest` |

@@ -571,7 +571,7 @@ its own.
 - **Surprise:** the aggregate number goes **down**, and that is the honest
   outcome rather than a defeat. Routing to the baseline caps six of fifteen
   configurations at 1.00x, which drags the geometric mean from SDPA's headline
-  1.584x to 1.322x. §4.1 explains why the lower number is the truthful one.
+  1.531x to 1.322x. §4.1 explains why the lower number is the truthful one.
 
 ### Rung 5 — not reached
 
@@ -595,7 +595,7 @@ configurations with zero accuracy failures** (min 0.984x, max 2.300x), from
 | strategy | geomean | min | max | n | failing configs excluded from this mean |
 |---|---|---|---|---|---|
 | `optimized` (shipped router) | **1.3218** | 0.9840 | 2.2998 | 15 | **0** |
-| `sdpa` (single strategy) | 1.5843 | 0.8525 | 2.4872 | 14 | **20** |
+| `sdpa` (single strategy) | 1.5312 | 0.8525 | 2.4872 | 12 | **9** |
 | `baseline` (control) | 0.9937 | 0.9863 | 1.0011 | 2 | 0 |
 
 Geometric mean, not arithmetic: speedups are ratios. A strategy that is 2x on
@@ -613,33 +613,30 @@ times it happened to be measured**, which is a fact about our development
 history rather than about the code. That is not a speedup, so we do not report
 it.
 
-The difference is material: over raw passing rows the same data gives `sdpa`
-1.530x (n=27) and `optimized` 1.351x (n=24), against the 1.584x and 1.322x
-above. **`results/summary.md` is generated with the raw-row aggregation and
-will therefore differ from this section**; where the two disagree, this section
-states the per-configuration figure and `summary.md` states the per-row one.
-Note also that the generated *figures* already use the per-configuration
-aggregation (`analysis/figures.py`), so summary.md's table and the plots beside
-it are not computed the same way. Standardising `analysis/make_all.py` on
-`latest_per_config` is filed as R5 in `docs/DECISIONS.md`.
+The difference is material: over raw passing rows the same data gave `sdpa`
+1.530x (n=27) and `optimized` 1.351x (n=24), against the 1.531x and 1.322x
+above. Every artefact now agrees. `speedup_summary` and
+`geometric_mean_speedup` both aggregate through `latest_per_config`, so
+`results/summary.md`, `results/report.html`, the generated figures and this
+section are computed the same way — filed as R5 in
+`docs/APPROVALS_NEEDED.md` and since fixed.
 
-**Why 1.322x is the honest number and 1.584x is not.** The obvious objection to
+**Why 1.322x is the honest number and 1.531x is not.** The obvious objection to
 the table above is that `sdpa` looks faster than the router built on top of it.
 It is not, and the reason is in the last column.
 
-`analysis/load.py`'s `usable()` filters to `status == "PASS"` *before* taking
-any average. So a strategy's geometric mean is computed only over the
-configurations where it happened to be correct, and every configuration it
-fails silently leaves the denominator. SDPA fails 20 rows — bf16 at every
-depth, fp16 at two or more layers, and causal fp32 at six layers — and its
-1.584x is the average over what remains after those are dropped. That is not a
-speedup anyone could ship: it is the speedup of a program that is wrong on a
-third of the matrix.
+A strategy's geometric mean is computed only over the configurations where it
+is correct: a configuration whose latest verdict is FAIL carries no speedup, so
+it leaves the denominator entirely. SDPA fails nine configurations — bf16 at
+every depth, fp16 at two or more layers, and causal fp32 at six layers — and
+its 1.531x is the average over what remains after those are dropped. That is
+not a speedup anyone could ship: it is the speedup of a program that is wrong
+on a third of the matrix.
 
 The router's 1.322x covers all fifteen configurations with **nothing dropped**,
 because there is nothing to drop. Where the fast path is unsafe it returns the
 baseline's own answer at ~1.00x rather than a wrong answer quickly. Comparing
-1.322 against 1.584 is therefore comparing a complete result against a filtered
+1.322 against 1.531 is therefore comparing a complete result against a filtered
 one, and the filtering is doing all of the work.
 
 Two further figures make the comparison like-for-like:
@@ -649,13 +646,16 @@ Two further figures make the comparison like-for-like:
   because the router only hands it work it is good at. The 1.322x is that
   number pulled toward 1.0 by six configurations where 1.0x is the correct
   answer.
-- SDPA's 1.584x additionally still contains two stale rows (2.124x and 1.778x)
-  for causal fp32 at L=6, a configuration later shown to pass only 52% of
-  random seeds. They survive because `latest_per_config()` applies the same
-  PASS filter before choosing the newest row per configuration, so a correcting
-  FAIL row can never supersede an earlier PASS. Removing just those two rows
-  drops SDPA to **1.531x**. The correcting rows are in `results.csv`; the fix
-  to the aggregation belongs to `analysis/load.py`.
+- SDPA's average previously read 1.584x because it still contained two stale
+  rows (2.124x and 1.778x) for causal fp32 at L=6, a configuration later shown
+  to pass only 52% of random seeds. `latest_per_config()` applied its PASS
+  filter *before* choosing the newest row per configuration, so a correcting
+  FAIL could never supersede an earlier PASS — the correcting row was removed
+  from the candidate set before the comparison happened. It now groups first
+  and filters to passing last, and a configuration whose latest verdict is FAIL
+  drops out rather than reverting to its last good number. That is what moves
+  SDPA to **1.531x** over 12 configurations. Filed as R1 in
+  `docs/APPROVALS_NEEDED.md` and since fixed.
 
 **The `d_model` axis runs backwards, and that decides the next rung.** Speedup
 *falls* as the model gets wider — **2.300x at d=256, 1.558x at d=512, 1.178x at
