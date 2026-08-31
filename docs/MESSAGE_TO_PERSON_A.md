@@ -269,3 +269,95 @@ such in the source. Push the `--matrix accuracy` rows and I'll derive it.
 2. `--matrix crossover` and `--matrix accuracy`.
 3. Confirm the fp32 max_abs discrepancy above.
 4. `python docs/check_ready.py --owner A` — 20 slots left, mostly §4 per-rung.
+
+---
+
+# Round 3 — R1 fixed, §3.2 aligned to your numbers, and one thing I did *not* change
+
+## R1 — fixed, and there was a second one next to it
+
+You were right and the diagnosis was exact. `latest_per_config` filtered to
+passing rows *before* taking the newest, so a corrective FAIL was gone from the
+candidate set before it could supersede. Group-then-filter now, as you said.
+
+**Verified: `2.124` and `1.778` appear nowhere in `results/report.html` or
+`results/summary.md`.** The causal sdpa configs drop out entirely; what survives
+for causal is `optimized` at ~1.00x, which is the router correctly falling back.
+
+One judgement call inside the fix: **SKIPPED and DISCARDED do not supersede.** A
+skipped row means the config was never run and a discarded one means its timing
+is untrustworthy — neither is a correction, so neither should erase a real
+earlier measurement. Only PASS / FAIL / OOM_BASELINE carry a verdict.
+
+**You also caught a second defect in the same family** with "plus the raw-row
+1.530× geomean". `speedup_summary` never called `latest_per_config` at all — it
+averaged raw rows, so a configuration was weighted by how many times it happened
+to be re-swept. 53 rows across 29 configurations. Both aggregators now take one
+row per configuration:
+
+| | before | after |
+|---|---|---|
+| sdpa | 1.530× over 27 rows | **1.531×** over **12 configs** |
+| optimized | 1.351× over 24 rows | **1.322×** over **15 configs** |
+
+The page headline now counts configurations rather than rows, so the two numbers
+can't be divided into each other.
+
+## §3.2 — moved to your numbers, not the other way
+
+Confirmed: your 13.75% reproduces exactly. §3.2 is now *derived* from the
+committed traces rather than retyped, so it can't drift again:
+
+| shape | launches | per fwd | share | mean launch |
+|---|---|---|---|---|
+| small | 345 | 115 | **13.75%** | 13.7 µs |
+| medium | 345 | 115 | 3.45% | 11.5 µs |
+| large | 345 | 115 | 0.80% | 11.0 µs |
+
+Your diagnosis in the open-discrepancy note was right on the mechanism: the
+launch count is identical across both trace generations, only the window moved
+(65.5 ms → 34.5 ms). I've replaced that note with the resolution, so it no
+longer tells a reader there's an unresolved contradiction.
+
+## The 115/67 collision — two different quantities, same number, same 42%
+
+Neither section was wrong; they measure different things and coincidentally
+share both figures.
+
+- **§3.2's 115** = TF32-**on** total, runtime API (67) + driver API (48).
+- **Rung 0.5's 115** = runtime-API count with TF32 **off**, falling to 67 with
+  TF32 on.
+- **The 67 is the same number in both.** Both comparisons are 42%, which is what
+  made it read as a contradiction.
+
+Rung 0.5 now states its counting method explicitly and flags that the TF32-off
+figure is **not reproducible from this repo** — re-running the profiler
+(`c39444f`) overwrote those traces. The committed ones confirm the TF32-on side
+only: 201 `cudaLaunchKernel` over three forwards is exactly 67 each.
+
+## CLAUDE.md — corrected, but I deliberately did NOT touch your declaration
+
+**Please don't narrow `SUPPORTED_DTYPES` to `(torch.float32,)`.** I looked at
+doing it and it would be wrong: fp16 genuinely passes at L=1 at 2.020×, so
+`(float32, float16)` is the accurate declaration, and narrowing it would make
+dispatch route fp16 to baseline at *every* depth and throw that result away.
+
+The real gap is narrower than "CLAUDE.md is wrong". `select_strategy()` is
+**depth-blind by design** — `DispatchKey` carries no layer count, because depth
+changes how long a forward takes but not which kernel suits a shape. That
+reasoning holds for performance and fails for correctness, which is exactly the
+case fp16 lands in.
+
+Your rule 3 is in the right place. `optimized.py` is the entry point the
+organizers instantiate and it knows `self.config.num_layers`; dispatch doesn't
+and shouldn't. **The shipped path is safe.** What was wrong was CLAUDE.md
+implying dispatch handled it — that's now corrected, and `select_strategy`'s own
+docstring carries the same caveat so nobody hits it by reading the wrong file.
+
+The one thing that remains genuinely unsafe is `sweep.py --strategy sdpa --dtype
+float16 --layers 6` — a known-failing config, useful only for reproducing the
+failure.
+
+## Still yours
+
+`python docs/check_ready.py --owner A` — 2 slots left.
