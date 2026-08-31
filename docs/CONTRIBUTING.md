@@ -389,7 +389,7 @@ means anything. Please paste me those rows.
 
 ## 8. Things I need from you
 
-### Right now: fill in `docs/APPROVALS_NEEDED.md` yourself
+### Right now: fill in `docs/DECISIONS.md` yourself
 
 Open it, answer the questions inline, commit, push. It has five decisions in it
 that are baked into code. **If you don't answer, these defaults apply** — they
@@ -426,7 +426,7 @@ are all the safe choice, but some are probably wrong for your machine:
 5. **Your report slots.** Run this to see exactly what's outstanding and who
    owes it:
    ```bash
-   python docs/check_ready.py --owner A
+   `python docs/check_ready.py`
    ```
    It exits non-zero while anything is unfilled, so we can use it as the
    final pre-submission check.
@@ -449,7 +449,7 @@ python bench/profile_baseline.py                           # 3. your profiling �
 Then:
 
 4. Read `docs/INTERFACE.md` (the contract) — 10 minutes.
-5. Fill in `docs/APPROVALS_NEEDED.md`, commit, push.
+5. Fill in `docs/DECISIONS.md`, commit, push.
 6. Paste me the rows from step 2 and the GPU-busy number from step 3.
 
 **Do step 3 before writing any kernel.** If the GPU turns out to be idle most of
@@ -566,7 +566,7 @@ python -m analysis.make_all
 explorer.exe "$(wslpath -w results/report.html)"
 
 # What's still unfilled in the submission docs?
-python docs/check_ready.py --owner A
+`python docs/check_ready.py`
 
 # Verify the organizers' file is untouched
 shasum -a 256 bench/torch_transformer_benchmark.py   # must match docs/INTERFACE.md

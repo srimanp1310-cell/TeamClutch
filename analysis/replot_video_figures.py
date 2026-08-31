@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Video-legible replots of two figures, written alongside the originals.
 
-Standalone on purpose. `analysis/figures.py` is Person B's file, so nothing here
-edits it and nothing here is imported by it -- `python -m analysis.make_all`
-still regenerates `vram_ceiling.png` and `accuracy_budget.png` exactly as
-before. These write `*_v2.png` next to them.
+Standalone on purpose: these are presentation variants, not the canonical
+figures. Nothing here edits `analysis/figures.py` and nothing there imports
+this, so `python -m analysis.make_all` still regenerates `vram_ceiling.png`
+and `accuracy_budget.png` exactly as before. These write `*_v2.png` beside
+them.
 
 Run:
 
-    python scratch/replot_video_figures.py
+    python analysis/replot_video_figures.py
 
 Two figures, two different problems.
 

@@ -2,14 +2,15 @@
 
 1. **Never edit `bench/torch_transformer_benchmark.py`** (or the tensorflow one) — organizers' files.
    Import them via `src/baseline.py`; their SHA-256 is pinned in `docs/INTERFACE.md`.
-2. **Never touch `src/strategies/*` or `src/optimized.py`** — Person A's. B owns `bench/sweep.py`,
-   `bench/thermal.py`, `bench/run_official.py`, `src/memcheck.py`, `src/dispatch.py`, `analysis/*`, `tests/*`, `docs/*`.
+2. **Two areas, kept separate.** Kernel implementations live in `src/strategies/*` and
+   `src/optimized.py`; the measurement harness is `bench/*`, `src/memcheck.py`, `src/dispatch.py`,
+   `analysis/*` and `tests/*`. Changing one while measuring with the other invalidates the numbers.
 3. **Everything B writes must run on macOS with no GPU.** Guard GPU paths with `torch.cuda.is_available()` /
    `shutil.which("nvidia-smi")`; degrade gracefully, never crash, never skip silently.
 4. **Correctness before speed.** Tolerance is the stricter pair `atol=0.001, rtol=0.01`, per element, OR-combined.
 5. **`results/results.csv` is append-only** — never regenerate or reorder. Column order is fixed in `docs/INTERFACE.md`.
 6. **No implementations in notebooks.** Logic lives in `src/`, `bench/`, `analysis/`.
-7. Follow `PLAN_PERSON_B.md`: one task per session, do not skip ahead.
+7. Follow `docs/PROJECT_PLAN.md`: one task per session, do not skip ahead.
 
 Smoke test (~1 s, CPU; add `--padding-ratio 0.3 --causal` for the mask branches):
 
@@ -51,9 +52,10 @@ failure.
 ## Non-negotiable rules
 
 - Never edit bench/torch_transformer_benchmark.py — SHA-256 pinned, a test fails.
-- Never edit Person B's files: bench/sweep.py, bench/thermal.py,
+- Harness files are pinned by the test suite: bench/sweep.py, bench/thermal.py,
   bench/run_official.py, src/memcheck.py, src/dispatch.py, src/baseline.py,
-  src/strategies/__init__.py, analysis/*, tests/*, pyproject.toml.
+  src/strategies/__init__.py, analysis/*, tests/*, pyproject.toml. Change one and
+  re-run the suite before trusting any number produced afterwards.
 - Strategies subclass BaselineTransformer, decorate @register("name"),
   signature forward(self, x, valid_token_mask=None).
 - Never rename or add parameters — copy_model_weights(strict=True) must pass.

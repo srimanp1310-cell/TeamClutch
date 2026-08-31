@@ -1,5 +1,5 @@
-# Person B (macOS, CPU-only) — harness, tests, analysis.
-# Person A additionally installs the CUDA build of torch (cu124) and triton on WSL2;
+# CPU-only install (macOS/Linux) — harness, tests, analysis.
+# The GPU machine additionally installs the CUDA build of torch (cu124) and triton;
 # see README "Setup" for the platform-specific torch index URL.
 torch
 numpy

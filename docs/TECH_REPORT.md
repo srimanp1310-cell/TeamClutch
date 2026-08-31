@@ -1167,7 +1167,7 @@ Stated plainly, because a report that claims no limitations is not credible.
    from the entry point the organizers instantiate.
 
    We deliberately did **not** silence them with `xfail` markers. `tests/` is
-   Person B's, and more importantly a test that fails loudly is a better record
+   harness-side, and more importantly a test that fails loudly is a better record
    of a real limitation than one marked expected-to-fail and skimmed past.
 
    Related, and the reason enforcement lives where it does: `SdpaTransformer`
@@ -1178,7 +1178,7 @@ Stated plainly, because a report that claims no limitations is not credible.
    could not express the real constraint, which is dtype *and* depth (fp16 is
    safe at one layer and unsafe at two). Both limits are therefore enforced by
    the routing rules in `src/optimized.py`, which is the only place they can be.
-   Filed for B as R4 in `docs/APPROVALS_NEEDED.md`.
+   Filed for B as R4 in `docs/DECISIONS.md`.
 
    One further known flake: `test_reduced_precision_on_gpu[float16-sdpa]` fails
    intermittently in full-suite runs and passes in isolation, which points at

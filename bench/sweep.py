@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sweep harness: strategy name in, CSV rows out.
 
-This is the file that turns Person A's kernels into evidence. Its one job is to
+This is the file that turns optimized kernels into evidence. Its one job is to
 produce numbers that are *the same numbers the organizers' script would print*,
 for many configurations, unattended, without dying half-way.
 
@@ -78,7 +78,7 @@ from bench.thermal import ThermalLogger, wait_until_cool  # noqa: E402
 # CSV schema
 # ---------------------------------------------------------------------------
 
-#: The 21 columns agreed with Person A in docs/INTERFACE.md. Order is fixed.
+#: The 21 columns fixed by the contract in docs/INTERFACE.md. Order is fixed.
 CSV_COLUMNS_AGREED: Tuple[str, ...] = (
     "timestamp", "git_sha", "strategy_name", "batch", "seq_len", "d_model",
     "heads", "layers", "dtype", "causal", "padding_ratio",
@@ -87,11 +87,11 @@ CSV_COLUMNS_AGREED: Tuple[str, ...] = (
     "peak_vram_mb", "mean_sm_clock_mhz", "max_temp_c", "notes",
 )
 
-#: Appended at the END only, as the contract permits, pending A's confirmation.
+#: Appended at the END only, as the contract permits.
 #: `baseline_peak_vram_mb` cannot be recovered later (the two peaks are not
 #: separable after the fact); `compile_baseline` and `ffn_dim` are free axes
 #: that the agreed columns do not pin down, so a row without them is ambiguous.
-#: If A vetoes them, empty this tuple -- readers tolerate either width.
+#: Emptying this tuple is safe -- readers tolerate either width.
 CSV_COLUMNS_PROPOSED: Tuple[str, ...] = (
     "baseline_peak_vram_mb", "compile_baseline", "ffn_dim",
 )

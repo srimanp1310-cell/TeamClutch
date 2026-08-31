@@ -1,4 +1,4 @@
-"""Strategy registry — the single contract point between Person A and Person B.
+"""Strategy registry — the contract between kernel implementations and the harness.
 
 A *strategy* is one optimized implementation of the Transformer forward pass.
 Every strategy:
@@ -24,7 +24,7 @@ Every strategy:
     so an unsupported dtype can never reach production and be silently wrong.
   * sets `MIN_CAPABILITY` if it needs particular hardware, e.g. `(8, 0)`.
 
-Person A registers a strategy like this::
+Register a strategy like this::
 
     # src/strategies/sdpa.py
     from src.baseline import BaselineTransformer

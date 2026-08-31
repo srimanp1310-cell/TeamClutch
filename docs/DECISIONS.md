@@ -1,6 +1,10 @@
-# For Person A — things I need from you
+# Decision record
 
-I've built the harness half of the repo (Tasks 0–5 of `PLAN_PERSON_B.md`):
+Open questions raised while building, and the answers that settled them. Each
+answer is baked into code somewhere, so this is the trail behind choices that
+would otherwise look arbitrary.
+
+I've built the harness half of the repo (Tasks 0–5 of `docs/PROJECT_PLAN.md`):
 skeleton, memory pre-check, sweep harness, correctness oracle, analysis and
 figures, and the dispatch layer. Before Day 1 I need a few decisions from you,
 because they're baked into files you'll be using and they're expensive to change

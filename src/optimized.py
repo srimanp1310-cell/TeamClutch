@@ -28,7 +28,7 @@ Rules
 
 Correctness gates first, then performance:
 
-1. no CUDA               -> baseline  (per docs/APPROVALS_NEEDED.md 1.2)
+1. no CUDA               -> baseline  (per docs/DECISIONS.md 1.2)
 2. bfloat16              -> baseline  (fails at every depth; see sdpa.py)
 3. float16 and L >= 2    -> baseline  (fp16 passes at L=1 only; see below)
 4. causal and L >= 6     -> baseline  (52% of seeds; see sdpa.py)
@@ -67,13 +67,13 @@ Two notes on cost
   strategy would duplicate every weight and break
   `copy_model_weights(..., strict=True)`.
 
-TODO(rung-2): migrate to `src.dispatch.select_strategy`, which reads the
-measured table generated from results.csv rather than the constants below.
-Deliberately not imported yet: it is Person B's file, it may not implement the
-causal and batch rules above, and a router that silently disagreed with the
-measurements would be worse than this one. The request is filed as R2 in
-docs/APPROVALS_NEEDED.md. When it lands, the rules here become the fallback
-table and this module keeps only `DispatchKey.from_forward(..., padded=...)`.
+`src.dispatch.select_strategy` reads the measured table generated from
+results.csv and applies the registration, capability and dtype gates. It is
+deliberately not used for the rules below: it is keyed on shape alone and
+carries no layer count, so it cannot express the causal and float16 *depth*
+limits that rules 3 and 4 encode. A router that silently disagreed with the
+measurements would be worse than an explicit one. See docs/TECH_REPORT.md 7.2
+for why admissibility turned out to be depth-dependent.
 """
 
 from __future__ import annotations
@@ -113,7 +113,7 @@ class UserOptimizedTransformer(SdpaTransformer):
     # Inherited from SdpaTransformer and deliberately not narrowed: this class
     # routes *around* those limits rather than declaring itself subject to them.
     # Both attributes are declarative only -- nothing in the repo reads either
-    # (see R4 in docs/APPROVALS_NEEDED.md), which is exactly why the limits are
+    # (see R4 in docs/DECISIONS.md), which is exactly why the limits are
     # enforced by the rules in `use_sdpa` instead of by declaration.
 
     def use_sdpa(self, x: torch.Tensor) -> bool:

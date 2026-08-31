@@ -82,12 +82,17 @@ before the matmul rather than scaling the product after contributes exactly
 zero, because `head_dim ** -0.5 = 0.125` here is a power of two and commutes
 exactly under any rounding.
 
-.. warning::
-   `SUPPORTED_DTYPES` below is **declarative only** -- as of this writing no
-   module in the repo reads it, so it excludes nothing at runtime. That is why
-   `results/results.csv` still contains failing bfloat16 rows. Enforcement
-   lives in `src/dispatch.py` (Person B's file); see the request in
-   `docs/APPROVALS_NEEDED.md`.
+.. note::
+   `SUPPORTED_DTYPES` below is **enforced**, in two places at once:
+   `src/dispatch.py` will not select this strategy for a dtype it does not
+   claim, and `tests/test_strategies.py` skips that dtype with a visible
+   reason. (An earlier revision was declarative only, which is why
+   `results/results.csv` still contains the failing bfloat16 rows from before
+   the gate existed -- the log is append-only.)
+
+   The declaration cannot express a *depth* limit, and fp16 admissibility
+   depends on depth. That rule lives in `src/optimized.py` instead; see
+   `docs/TECH_REPORT.md` 7.2.
 """
 
 from __future__ import annotations

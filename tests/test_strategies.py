@@ -1,6 +1,6 @@
 """The accuracy oracle: every registered strategy vs the baseline, on CPU.
 
-This is the test Person A runs before every push, on either machine. It exists
+This is the test to run before every push, on either machine. It exists
 to answer one question precisely: *if this strategy is wrong, which branch is
 wrong?* So the matrix deliberately crosses the two things that break first --
 padding and causal masking -- with shapes chosen to break assumptions:
@@ -158,7 +158,7 @@ def skip_if_cuda_only(strategy_name: str) -> None:
     if requires_cuda(strategy_name) and not CUDA:
         pytest.skip(
             f"{strategy_name} declares REQUIRES_CUDA = True and this machine has "
-            "no GPU — correctness for it must be verified on Person A's box"
+            "no GPU — correctness for it must be verified on the GPU machine"
         )
 
 
