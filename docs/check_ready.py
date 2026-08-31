@@ -38,6 +38,13 @@ def scan(root: Path) -> Dict[str, List[Tuple[int, str, str]]]:
             continue
         for number, line in enumerate(path.read_text().splitlines(), start=1):
             for owner, description in PATTERN.findall(line):
+                # `<FILL A: …>` with a literal ellipsis is the *legend* — the
+                # sentence in each document explaining the convention — not a
+                # slot anyone has to fill. Counting it means this script can
+                # never reach zero, which would make its exit code useless as a
+                # submission gate.
+                if description.strip() in ("…", "...", ""):
+                    continue
                 found[str(path.relative_to(root))].append(
                     (number, (owner or "?").upper(), " ".join(description.split())[:90])
                 )

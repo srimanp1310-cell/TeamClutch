@@ -816,14 +816,38 @@ the chart.
 
 ![Roofline](../results/figures/roofline.png)
 
-`<FILL B: which configurations land left of the ridge, which land right, and how
-close the best strategy gets to its roof.>`
+Analytic intensity against the 62.9 FLOP/byte fp32 ridge (B=8, d=512, H=8,
+L=6, fp32), with measured throughput for the fused path:
+
+| S | baseline, explicit scores | side of ridge | fused | achieved |
+|---|---|---|---|---|
+| 128 | 76.2 | right | 88.9 | 5.0 TFLOP/s |
+| 512 | 64.6 | right, barely | 113.8 | 6.4 TFLOP/s |
+| 1024 | 52.0 | **left** | 133.2 | 5.6 TFLOP/s |
+| 2048 | 40.5 | **left** | 168.6 | — |
+
+The fused path reaches **5.0–6.4 TFLOP/s against an 11.0 TFLOP/s roof**, so
+45–58% of achievable peak. The remaining gap is not attention: with the score
+matrix no longer crossing HBM, what is left is the FFN GEMMs and the elementwise
+traffic between them, which is where a fused LayerNorm (Rung 6) would have
+gone.
 
 The prediction from §1.1 is testable here: the baseline should walk *left* along
 the x-axis as S grows, crossing the fp32 ridge near S=1024, while the fused path
 walks right. The measured fp32 ridge (62.9 FLOP/byte) is within half a percent
 of the placeholder the prediction was made against (62.5), so the prediction
-stands as recorded. `<FILL B: does the measured data follow it?>`
+stands as recorded. **It does, and more precisely than the prediction claimed.**
+
+The baseline's intensity falls monotonically — 76.2, 64.6, 52.0, 40.5 — and
+crosses the ridge **between S=512 and S=1024**, where §1.1 said "around
+S=1024". The fused path moves the opposite way over the same shapes, 88.9 to
+168.6, and never approaches the ridge from above.
+
+That the two curves diverge from a common workload is the entire argument for
+fused attention stated geometrically: same arithmetic, different bytes. And it
+is the same conclusion §4 reaches from timing alone, where the measured speedup
+overshoots the FLOP-share ceiling. Two independent routes — an analytic byte
+count and a stopwatch — to the same claim.
 
 ---
 
