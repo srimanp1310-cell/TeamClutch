@@ -191,7 +191,7 @@ no pretrained weights.
 ## Links
 
 - **Repository:** <https://github.com/srimanp1310-cell/TeamClutch>
-- **Demo video (YouTube, public):** `<FILL: URL — add after uploading the demo video>`
+- **Demo video (YouTube, public):** <https://youtu.be/FwJuWa1SSwo>
 
 ## Try it yourself
 

@@ -2,6 +2,7 @@
 
 **Format:** screen recording with voiceover. Terminal + the results page.
 **Upload:** YouTube, **public** visibility, linked in the Devpost description.
+**Published:** <https://youtu.be/FwJuWa1SSwo>
 
 **Two hard rules.** No third-party logos, trademarks or copyrighted content
 beyond what is unavoidable on screen (a terminal showing `nvidia-smi` output is
@@ -193,7 +194,7 @@ python bench/run_official.py --batch-size 8 --seq-len 1024
 - [ ] Terminal font large enough to read at 720p
 - [ ] GPU cool before the live `run_official.py` take
 - [ ] No third-party logos or branding visible
-- [ ] Uploaded to YouTube as **public**, link pasted into the Devpost description
+- [x] Uploaded to YouTube as **public**, link pasted into the Devpost description
 
 ---
 

@@ -6,6 +6,8 @@
 > live in `results/results.csv` (append-only) and are summarised in
 > `results/summary.md` and `results/report.html`.
 
+**Demo video (3 min):** <https://youtu.be/FwJuWa1SSwo>
+
 ## Project overview
 
 The organizers provide a fixed Transformer and a correct-but-slow reference
