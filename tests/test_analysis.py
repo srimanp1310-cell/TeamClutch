@@ -102,6 +102,67 @@ def test_latest_per_config_keeps_the_newest_row_only(frame):
     assert kept["timestamp"] == candidates["timestamp"].max()
 
 
+def test_a_later_failure_supersedes_an_earlier_pass():
+    """The regression this exists for.
+
+    Filtering to passing rows before taking the newest means a corrective FAIL
+    is removed from the candidate set before it can supersede — so a config
+    that was re-run and found to fail keeps reporting the speedup from the run
+    that passed. Exactly backwards: a re-run exists because the earlier result
+    was in doubt.
+    """
+    toy = pd.DataFrame({
+        "strategy_name": ["s", "s"],
+        "config_key": ["k", "k"],
+        "timestamp": pd.to_datetime(["2026-08-28T10:00Z", "2026-08-28T15:00Z"]),
+        "status": ["PASS", "FAIL"],
+        "speedup": [2.124, float("nan")],
+        "compile_baseline": [False, False],
+    })
+    assert load.latest_per_config(toy).empty, (
+        "a config whose newest verdict is FAIL must drop out, not revert to its "
+        "last good speedup"
+    )
+    # ...and the reverse order still keeps the passing row.
+    toy.loc[0, "status"], toy.loc[1, "status"] = "FAIL", "PASS"
+    toy.loc[0, "speedup"], toy.loc[1, "speedup"] = float("nan"), 1.5
+    kept = load.latest_per_config(toy)
+    assert len(kept) == 1 and kept.iloc[0]["speedup"] == 1.5
+
+
+def test_absence_does_not_supersede_a_measurement():
+    """SKIPPED means never run and DISCARDED means the timing is untrustworthy.
+    Neither is a correction, so neither may erase a real earlier result."""
+    for status in ("SKIPPED", "DISCARDED"):
+        toy = pd.DataFrame({
+            "strategy_name": ["s", "s"], "config_key": ["k", "k"],
+            "timestamp": pd.to_datetime(["2026-08-28T10:00Z", "2026-08-28T15:00Z"]),
+            "status": ["PASS", status],
+            "speedup": [1.8, float("nan")],
+            "compile_baseline": [False, False],
+        })
+        kept = load.latest_per_config(toy)
+        assert len(kept) == 1, status
+        assert kept.iloc[0]["speedup"] == 1.8, status
+
+
+def test_causal_sdpa_rows_are_superseded_in_the_real_log(frame):
+    """Guards the specific artefact that was about to be narrated on camera:
+    the causal sdpa configs were re-run and found to fail, so their earlier
+    2.124x/1.778x must not appear anywhere downstream."""
+    real = load.load_results(Path(__file__).resolve().parents[1] / "results" / "results.csv")
+    if real.empty:
+        pytest.skip("no measured rows yet")
+    surviving = load.latest_per_config(real)
+    causal_sdpa = surviving[
+        (surviving["causal"] == True) & (surviving["strategy_name"] == "sdpa")  # noqa: E712
+    ]
+    assert causal_sdpa.empty, (
+        "causal sdpa configs have a newer FAIL verdict and must not survive: "
+        f"{causal_sdpa[['seq_len', 'speedup']].to_dict('records')}"
+    )
+
+
 def test_config_key_distinguishes_the_compile_baseline_condition(frame):
     """Otherwise a later compiled-baseline run silently replaces the eager one."""
     assert "compile_baseline" in load.CONFIG_FIELDS
@@ -118,6 +179,8 @@ def test_geometric_mean_on_a_hand_computed_toy_frame():
     """2.0, 4.0, 8.0 -> exactly 4.0. The arithmetic mean would say 4.67."""
     toy = pd.DataFrame({
         "strategy_name": ["s", "s", "s"],
+        "config_key": ["a", "b", "c"],          # three distinct configs
+        "timestamp": pd.to_datetime(["2026-08-28T10:00Z"] * 3),
         "speedup": [2.0, 4.0, 8.0],
         "status": ["PASS"] * 3,
         "compile_baseline": [False] * 3,
@@ -129,7 +192,9 @@ def test_geometric_mean_on_a_hand_computed_toy_frame():
 def test_geometric_mean_punishes_a_regression_the_way_it_should():
     """2x on one shape and 0.5x on another is 1.00x, not 1.25x."""
     toy = pd.DataFrame({
-        "strategy_name": ["s", "s"], "speedup": [2.0, 0.5],
+        "strategy_name": ["s", "s"], "config_key": ["a", "b"],
+        "timestamp": pd.to_datetime(["2026-08-28T10:00Z"] * 2),
+        "speedup": [2.0, 0.5],
         "status": ["PASS"] * 2, "compile_baseline": [False] * 2,
     })
     assert load.geometric_mean_speedup(toy, "s") == pytest.approx(1.0)

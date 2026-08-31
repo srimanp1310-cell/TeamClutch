@@ -118,13 +118,13 @@ no pretrained weights.
 
 ## Links
 
-- **Repository:** `<FILL A/B: public GitHub URL>`
+- **Repository:** <https://github.com/srimanp1310-cell/TeamClutch>
 - **Demo video (YouTube, public):** `<FILL A: URL>`
 
 ## Try it yourself
 
 ```bash
-git clone <FILL A/B: repo URL> && cd <repo>
+git clone https://github.com/srimanp1310-cell/TeamClutch && cd <repo>
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt && pip install -e .
 

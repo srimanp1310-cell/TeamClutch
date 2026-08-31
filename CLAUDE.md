@@ -27,12 +27,26 @@ Ridge points: 62.9 FLOP/byte fp32(TF32), 128.7 fp16, 132.7 bf16 — the ridge
 moves RIGHT as precision drops, so reduced precision can make a workload MORE
 memory-bound, not less.
 
-**Ship fp16, not bf16.** bf16 is 3% faster on this card but cannot pass the
-accuracy oracle: the worst element is 2 ULP of bf16 (1.44% relative) against a
-1% rtol, because the reference rounds softmax probabilities to bf16 before the
-PV matmul and a fused kernel does not. See docs/INTERFACE.md §5.1. Strategies
-declare `SUPPORTED_DTYPES = (torch.float32, torch.float16)`; dispatch then never
-routes bf16 to them.
+**At the benchmark's default depth (6 layers), fp32 is the only shippable
+dtype.** bf16 fails at every depth: the worst element is 2 ULP of bf16 (1.44%
+relative) against a 1% rtol, because the reference rounds softmax probabilities
+to bf16 before the PV matmul and a fused kernel does not. fp16 passes at **one**
+layer (2.020x) and fails from two, once error has compounded through the
+residual stream. See docs/INTERFACE.md §5.1 and TECH_REPORT §7.2.
+
+`sdpa` therefore declares `SUPPORTED_DTYPES = (torch.float32, torch.float16)` --
+correct, because fp16 genuinely passes at L=1 -- and `src/dispatch.py` never
+routes bf16 to it.
+
+**`select_strategy()` is depth-blind, on purpose.** `DispatchKey` carries no
+layer count, because depth changes how long a forward takes but not which kernel
+suits a shape -- true for performance, false for correctness. So dispatch alone
+will hand `sdpa` an fp16 tensor at any depth. The fp16 depth rule lives in
+`src/optimized.py` (rule 3), which is the entry point the organizers' script
+instantiates, so **the shipped path is safe**. Calling `select_strategy()`
+directly, or `sweep.py --strategy sdpa --dtype float16 --layers 6`, is not --
+that combination is a known-failing config and only useful for reproducing the
+failure.
 
 ## Non-negotiable rules
 

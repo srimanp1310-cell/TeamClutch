@@ -219,11 +219,11 @@ kernel *count* and states plainly how far that argument reaches.
 
 Baseline, fp32 with TF32 on, 6 layers, no causal, no padding:
 
-| shape | launches | launch share of wall time | mean launch | verdict |
-|---|---|---|---|---|
-| small (B=8, S=128) | 345 | **8.2%** | 15.5 µs | borderline |
-| medium (B=8, S=512) | 345 | 2.9% | 11.6 µs | not launch-bound |
-| large (B=4, S=2048) | 345 | 1.3% | 19.7 µs | not launch-bound |
+| shape | launches | per forward | launch share of wall time | mean launch | verdict |
+|---|---|---|---|---|---|
+| small (B=8, S=128) | 345 | 115 | **13.75%** | 13.7 µs | borderline |
+| medium (B=8, S=512) | 345 | 115 | 3.45% | 11.5 µs | not launch-bound |
+| large (B=4, S=2048) | 345 | 115 | 0.80% | 11.0 µs | not launch-bound |
 
 ![Launch overhead by shape](../results/figures/gpu_launch_overhead.png)
 
@@ -235,11 +235,26 @@ answer:
    inside the runtime-API ones — we checked. Counting only `cudaLaunchKernel`
    gives 67 launches per forward; including the driver path gives **115**, a 42%
    undercount.
-2. **Per-launch cost is measured, not assumed.** The mean is 15.5 µs at the
-   small shape, not the ~5 µs a back-of-envelope estimate would use.
+2. **Per-launch cost is measured, not assumed.** The mean is
+   13.7 µs at the small shape, not the ~5 µs a
+   back-of-envelope estimate would use.
 
-Together those take the small shape's launch share from ~2.5% to **8.2%** — the
-difference between "definitively not launch-bound" and "borderline".
+Together those take the small shape's launch share from ~2.5% to
+**13.75%** — the difference between
+"definitively not launch-bound" and "borderline".
+
+Every figure in that table is reproducible from the traces committed in `logs/`:
+
+```bash
+python -c "from analysis.trace import load_trace, launch_stats; \
+  print(launch_stats(load_trace('logs/trace_small_baseline.json'), forwards=3))"
+```
+
+An earlier draft of this section quoted 8.2%, computed against the first set of
+traces. Re-running `bench/profile_baseline.py` (commit `c39444f`) shortened the
+profiled window from 65.5 ms to 34.5 ms without
+changing the launch count, which nearly doubled the ratio. The launch *count*
+and *cost* are stable across both runs; only the denominator moved.
 
 **Reading it honestly:** launch share is an *upper bound*. Launches are
 asynchronous, so CPU time inside a launch call does not prove the GPU was idle —
@@ -265,15 +280,30 @@ worth reading.
 Not an optimization, but the most instructive measurement of the project.
 
 The first profiling run reported 18.6 / 64.6 / 215.2 ms across the three shapes,
-with **115** kernels per forward. Those numbers were wrong. The standalone
-profiling script never set `matmul_precision="high"` or `allow_tf32=True`, both
-of which the organizers' `main()` sets by default — so it was running fp32
-matmuls at 5.7 TFLOP/s while `sweep.py` ran the same code at 11.0. We had two
-contradictory baselines and, for a while, no idea which was real.
+with **115 `cudaLaunchKernel` calls per forward**. Those numbers were wrong. The
+standalone profiling script never set `matmul_precision="high"` or
+`allow_tf32=True`, both of which the organizers' `main()` sets by default — so it
+was running fp32 matmuls at 5.7 TFLOP/s while `sweep.py` ran the same code at
+11.0. We had two contradictory baselines and, for a while, no idea which was
+real.
 
 After matching the organizers' global state: **13.5 / 52.1 / 176.5 ms**, and the
-kernel count dropped to 67 runtime-API launches per forward. 18–27% faster, 42%
-fewer kernels.
+count dropped to **67 `cudaLaunchKernel` calls per forward**. 18–27% faster, 42%
+fewer runtime-API launches.
+
+> **Two different 115s — this is a coincidence, not a contradiction.** §3.2 also
+> reports 115 launches per forward, and it is not this number. There, 115 is the
+> *total* with TF32 already on, counting the runtime API (67) plus the driver
+> API (48) that cuBLAS submits through directly. Here, 115 is the *runtime-API
+> count alone* with TF32 off, which falls to 67 when TF32 is enabled. Both
+> comparisons happen to be 42%, which makes the collision look worse than it is.
+> The 67 is the same quantity in both sections; the two 115s are not.
+>
+> One caveat on provenance: the TF32-off figure is as originally observed and is
+> **not reproducible from this repository** — re-running `profile_baseline.py`
+> (commit `c39444f`) overwrote those traces with TF32-on ones. The committed
+> traces confirm the TF32-on side only: 201 `cudaLaunchKernel` records over three
+> profiled forwards is exactly 67 each.
 
 The kernel-count drop is the interesting part. TF32 is a *math mode*, not a
 storage format — the naive expectation is that the same kernels run faster.
@@ -484,16 +514,22 @@ its own.
   timeline showing actual gaps between kernel executions. **That is exactly what
   the WSL2 CUPTI gap prevents us from producing on this machine** (§11 item 7).
 
-  > **Open discrepancy — flagged, not resolved.** §3.2 reports these same three
-  > shapes at 8.2% / 2.9% / 1.3% with a 15.5 µs mean launch. Those figures
-  > reproduce *exactly* against the traces committed in `56d3149`, and not
-  > against the refreshed traces in `c39444f` that this section uses; the launch
-  > *count* (345 total, 115 per forward) is identical across both trace
-  > generations, so only the timings moved. Separately, §4 Rung 0.5 explains the
-  > 67 → 115 pair as a TF32 kernel-selection effect while §3.2 explains it as a
-  > runtime-versus-driver counting correction. Both of those sections are Person
-  > B's and both are left as written — reconciling them is his call, not a
-  > correction to make inside someone else's section.
+  > **Both discrepancies flagged here are now resolved.** §3.2 previously quoted
+  > 8.2% / 2.9% / 1.3%, computed against the traces committed in `56d3149`; it is
+  > now derived from the refreshed `c39444f` traces this section uses and agrees
+  > exactly. The diagnosis in this note was correct: the launch *count* (345
+  > total, 115 per forward) is identical across both trace generations, and only
+  > the profiled window moved — 65.5 ms to 34.5 ms — which nearly doubled the
+  > ratio without any measurement changing.
+  >
+  > The 67 → 115 pair was two different quantities sharing a number. §3.2's 115
+  > is the TF32-**on** total across runtime and driver APIs; Rung 0.5's 115 is the
+  > runtime-API count with TF32 **off**, which falls to 67 when TF32 is enabled.
+  > The 67 is the same figure in both. Both comparisons happen to be 42%, which
+  > is what made the collision read as a contradiction. Rung 0.5 now states the
+  > counting method explicitly and flags that its TF32-off figure is not
+  > reproducible from this repository, since re-running the profiler overwrote
+  > those traces.
 
 - **Surprise:** the intuition that a six-layer model with ~100 small kernels
   must be launch-bound proved wrong at the two shapes that carry our speedup and
@@ -780,14 +816,38 @@ the chart.
 
 ![Roofline](../results/figures/roofline.png)
 
-`<FILL B: which configurations land left of the ridge, which land right, and how
-close the best strategy gets to its roof.>`
+Analytic intensity against the 62.9 FLOP/byte fp32 ridge (B=8, d=512, H=8,
+L=6, fp32), with measured throughput for the fused path:
+
+| S | baseline, explicit scores | side of ridge | fused | achieved |
+|---|---|---|---|---|
+| 128 | 76.2 | right | 88.9 | 5.0 TFLOP/s |
+| 512 | 64.6 | right, barely | 113.8 | 6.4 TFLOP/s |
+| 1024 | 52.0 | **left** | 133.2 | 5.6 TFLOP/s |
+| 2048 | 40.5 | **left** | 168.6 | — |
+
+The fused path reaches **5.0–6.4 TFLOP/s against an 11.0 TFLOP/s roof**, so
+45–58% of achievable peak. The remaining gap is not attention: with the score
+matrix no longer crossing HBM, what is left is the FFN GEMMs and the elementwise
+traffic between them, which is where a fused LayerNorm (Rung 6) would have
+gone.
 
 The prediction from §1.1 is testable here: the baseline should walk *left* along
 the x-axis as S grows, crossing the fp32 ridge near S=1024, while the fused path
 walks right. The measured fp32 ridge (62.9 FLOP/byte) is within half a percent
 of the placeholder the prediction was made against (62.5), so the prediction
-stands as recorded. `<FILL B: does the measured data follow it?>`
+stands as recorded. **It does, and more precisely than the prediction claimed.**
+
+The baseline's intensity falls monotonically — 76.2, 64.6, 52.0, 40.5 — and
+crosses the ridge **between S=512 and S=1024**, where §1.1 said "around
+S=1024". The fused path moves the opposite way over the same shapes, 88.9 to
+168.6, and never approaches the ridge from above.
+
+That the two curves diverge from a common workload is the entire argument for
+fused attention stated geometrically: same arithmetic, different bytes. And it
+is the same conclusion §4 reaches from timing alone, where the measured speedup
+overshoots the FLOP-share ceiling. Two independent routes — an analytic byte
+count and a stopwatch — to the same claim.
 
 ---
 

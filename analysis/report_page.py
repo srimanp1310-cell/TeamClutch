@@ -230,6 +230,11 @@ def build_page(
     frame = load_results(results_path) if results_path.exists() else pd.DataFrame()
 
     summaries = speedup_summary(frame) if len(frame) else []
+    # Configurations, not raw rows: the summary statistics are taken per
+    # configuration, and a headline counting rows next to a geomean counting
+    # configs invites the reader to divide one by the other.
+    latest = latest_per_config(frame) if len(frame) else frame
+    configs = int(latest["config_key"].nunique()) if len(latest) else 0
     optimized = [s for s in summaries if s.strategy != "baseline"]
     best = optimized[0] if optimized else None
     focus = strategy or (best.strategy if best else None)
@@ -251,7 +256,7 @@ def build_page(
   <div class="headline">
     {_stat(f"{best.geomean:.3f}×" if best else "—", "geometric mean speedup")}
     {_stat(f"{best.maximum:.3f}×" if best else "—", "best measured", signal=True)}
-    {_stat(str(counts.get("PASS", 0)), "passing measurements")}
+    {_stat(str(configs), "configurations measured")}
     {_stat(f"{control.geomean:.3f}×" if control else "—", "control (must be 1.000)")}
   </div>
 </div></header>""")
