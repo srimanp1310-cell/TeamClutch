@@ -107,9 +107,9 @@ footer .row{display:flex;flex-wrap:wrap;gap:28px;margin-top:12px;
   each row carries the commit it was produced at. The claims were recorded before the
   measurements, and where a measurement contradicted one, the contradiction is the finding.</p>
   <div class="headline">
-    <div class="stat"><div class="n">1.530×</div><div class="k">geometric mean speedup</div></div>
+    <div class="stat"><div class="n">1.531×</div><div class="k">geometric mean speedup</div></div>
     <div class="stat is-signal"><div class="n">2.487×</div><div class="k">best measured</div></div>
-    <div class="stat"><div class="n">53</div><div class="k">passing measurements</div></div>
+    <div class="stat"><div class="n">16</div><div class="k">configurations measured</div></div>
     <div class="stat"><div class="n">0.994×</div><div class="k">control (must be 1.000)</div></div>
   </div>
 </div></header>
@@ -143,7 +143,7 @@ footer .row{display:flex;flex-wrap:wrap;gap:28px;margin-top:12px;
     <thead><tr><th>seq len</th><th>attention, share of FLOPs</th>
       <th>ceiling if time ∝ FLOPs</th><th>measured</th>
       <th>implied share of runtime</th></tr></thead>
-    <tbody><tr><td class="num">128</td><td class="num">4.0%</td><td class="num">1.042×</td><td class="num">0.910×</td><td class="num">—</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num">0.853×</td><td class="num">—</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.780×</td><td class="num">44%</td></tr><tr><td class="num">512</td><td class="num">25.0%</td><td class="num">1.333×</td><td class="num sig">2.487×</td><td class="num">60%</td></tr><tr><td class="num">512</td><td class="num">7.7%</td><td class="num">1.083×</td><td class="num sig">1.219×</td><td class="num">18%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.621×</td><td class="num">38%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">2.124×</td><td class="num">53%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.778×</td><td class="num">44%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.501×</td><td class="num">33%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.509×</td><td class="num">34%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.544×</td><td class="num">35%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.684×</td><td class="num">41%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">2.000×</td><td class="num">50%</td></tr><tr><td class="num">1024</td><td class="num">25.0%</td><td class="num">1.333×</td><td class="num sig">2.077×</td><td class="num">52%</td></tr></tbody></table></div>
+    <tbody><tr><td class="num">128</td><td class="num">4.0%</td><td class="num">1.042×</td><td class="num">0.910×</td><td class="num">—</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num">0.853×</td><td class="num">—</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.780×</td><td class="num">44%</td></tr><tr><td class="num">512</td><td class="num">25.0%</td><td class="num">1.333×</td><td class="num sig">2.487×</td><td class="num">60%</td></tr><tr><td class="num">512</td><td class="num">7.7%</td><td class="num">1.083×</td><td class="num sig">1.219×</td><td class="num">18%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.621×</td><td class="num">38%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.501×</td><td class="num">33%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.509×</td><td class="num">34%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.544×</td><td class="num">35%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">1.684×</td><td class="num">41%</td></tr><tr><td class="num">512</td><td class="num">14.3%</td><td class="num">1.167×</td><td class="num sig">2.000×</td><td class="num">50%</td></tr><tr><td class="num">1024</td><td class="num">25.0%</td><td class="num">1.333×</td><td class="num sig">2.077×</td><td class="num">52%</td></tr></tbody></table></div>
   <div class="callout"><div class="h">The measurement overshot its own ceiling</div>
   <p>At S=512, attention is 25.0% of the forward pass's
   arithmetic, so making it <em>infinitely fast</em> could yield at most
@@ -218,7 +218,7 @@ footer .row{display:flex;flex-wrap:wrap;gap:28px;margin-top:12px;
   <code>results/results.csv</code>. Nothing on this page is hand-written;
   re-running reproduces it.</div>
   <div class="row">
-    <span>2026-08-31 08:19 UTC</span>
+    <span>2026-08-31 08:33 UTC</span>
     <span>RTX 4050 Laptop (sm_89, low-TGP)</span>
     <span>77 rows in the log</span>
   </div>
