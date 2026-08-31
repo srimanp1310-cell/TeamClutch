@@ -32,7 +32,7 @@ implementation materializes that matrix explicitly, and in fp32 for stability,
 so it moves roughly `2e + 8` bytes per score element per layer. That single fact
 predicts the whole optimization ladder, and the analytic numbers bear it out:
 as sequence length grows from 512 to 4096, the reference's arithmetic intensity
-*falls* from 64.6 to 32.3 FLOP/byte — sliding below the card's 62.5 FLOP/byte
+*falls* from 64.6 to 32.3 FLOP/byte — sliding below the card's 62.9 FLOP/byte
 ridge point into the bandwidth-bound region — while a fused path's intensity
 *rises* from 113.8 to 237.4. So we profiled first, confirmed which bottleneck we
 actually had at each shape, and optimized in that order: we fixed a baseline that
