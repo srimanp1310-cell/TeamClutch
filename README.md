@@ -1,7 +1,7 @@
 # Transformer GPU Kernel Optimization — TikTok TechJam 2026, Task 3
 
 > **Status: complete and reproducible from a clean clone.** Verified end to end
-> on 2026-08-31: install, `pytest` (286 passed, 5 skipped), the control sweep,
+> on 2026-08-31: install, `pytest` (290 passed, 5 skipped), the control sweep,
 > the organizers' own script, and full figure regeneration. Measured numbers
 > live in `results/results.csv` (append-only) and are summarised in
 > `results/summary.md` and `results/report.html`.
@@ -90,7 +90,7 @@ python -m analysis.make_all                                  # regenerate every 
 **Run `pytest`, not `pytest -q`.** `pyproject.toml` already sets `addopts = "-q"`,
 so adding another `-q` becomes `-qq` and suppresses the summary line — you get a
 wall of dots and no verdict. Plain `pytest` prints the count. Expected on a clean
-clone: **286 passed, 5 skipped**, no failures. Four of the skips are the bfloat16
+clone: **290 passed, 5 skipped**, no failures. Four of the skips are the bfloat16
 cases, skipped with a visible reason because the strategies declare
 `SUPPORTED_DTYPES` without bf16 (see [docs/INTERFACE.md](docs/INTERFACE.md) §5.1);
 the fifth is a thermal-logging path that only runs on a machine without

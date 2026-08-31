@@ -55,7 +55,7 @@ python bench/run_official.py --batch-size 8 --seq-len 1024
 >
 > **Do not run `pytest -q`.** `pyproject.toml` already sets `-q`, so a second one
 > suppresses the summary line and you get dots with no verdict. Use plain
-> `pytest` if you show it: **286 passed, 5 skipped**.
+> `pytest` if you show it: **290 passed, 5 skipped**.
 >
 > **Two figures the script used to call for no longer exist**:
 > `trace_timeline_small.png` and `gpu_busy_vs_shape.png`. WSL2's CUPTI populates
@@ -217,7 +217,7 @@ if the log has grown.
 | sdpa geomean | 1.531x, n=12 | same, strategy `sdpa` |
 | bf16 error | exactly 2 ULP = 1.44% vs 1% rtol | `docs/TECH_REPORT.md` §7.1 |
 | causal false positive | 21/40 seeds (52%) | `docs/DECISIONS.md` R2 |
-| test suite | 286 passed, 5 skipped | `pytest` |
+| test suite | 290 passed, 5 skipped | `pytest` |
 
 **Not spoken, deliberately.** Thermal discards: **zero** runs were discarded —
 the four thermal defences are real and logged, but no run tripped them, so
