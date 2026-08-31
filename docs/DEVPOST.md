@@ -61,10 +61,14 @@ That makes the measurement apparatus part of the deliverable, so we built it:
 - and a shape-and-capability dispatch layer built from the measurements, which
   can only ever pick a strategy that is registered and supported by the card.
 
-We also report the number that makes us look worse: how much of the speedup
-survives when the *baseline* is compiled too. Some of any gain over an eager
-baseline is just `torch.compile` doing what it does to any model, and reporting
-only the flattering number is the easiest way to overstate a result.
+The harness also carries the check that would make us look worse: how much of
+the speedup survives when the *baseline* is compiled too. Some of any gain over
+an eager baseline is just `torch.compile` doing what it does to any model, and
+reporting only the flattering number is the easiest way to overstate a result.
+The `--compile-baseline` path is built, tested and wired into the results
+schema — but we ran out of GPU time before producing rows with it, so **we have
+no number to report there yet**, and we would rather say so than quote the eager
+comparison as though it were the whole story.
 
 ## Results
 
