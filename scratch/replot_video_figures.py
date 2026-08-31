@@ -53,6 +53,9 @@ sys.path.insert(0, str(ROOT))
 
 from analysis.figures import _ofat_slice  # noqa: E402  read-only import
 from analysis.load import load_results, speedup_summary, usable  # noqa: E402
+from analysis.roofline import (  # noqa: E402  read-only import
+    RTX_4050_LAPTOP, ridge_point, roofline_frame,
+)
 from analysis.style import INK, STATUS, color_for, finish, new_figure  # noqa: E402
 
 RESULTS = ROOT / "results" / "results.csv"
@@ -222,6 +225,139 @@ def accuracy_budget_v2(frame: pd.DataFrame, out_dir: Path = FIGURE_DIR) -> Path:
     return saved
 
 
+#: Strategy → marker. Shape carries strategy so colour is free for dtype.
+_STRATEGY_MARKERS = {"baseline": "o", "sdpa": "^", "optimized": "s"}
+
+
+def roofline_v2(frame: pd.DataFrame, out_dir: Path = FIGURE_DIR) -> Path:
+    """Log-log roofline, rebuilt for legibility at video resolution.
+
+    Three defects in the original, two cosmetic and one substantive.
+
+    *Ticks.* A log x-axis draws minor ticks per decade and, over a range this
+    narrow, matplotlib labelled majors and minors both — producing overlapping
+    strings like "2 x 10^4 10 10.0 10^1 10^2". Minor labels are suppressed and
+    the majors are set explicitly.
+
+    *Legend.* Two legends sat at upper-left, directly under the title and across
+    the dotted roofs. One combined legend now sits lower-right, the only region
+    the data leaves empty.
+
+    *The missing reduced-precision points.* They were never missing. Both bf16
+    rows and the fp16 six-layer row land at the same arithmetic intensity
+    (227.55) and within 0.6% of the same throughput (5.70 / 5.71 / 5.73), so
+    they draw on top of one another and only the last survives. But they should
+    not be there at all: all three are runs where the router fell back to the
+    baseline, so they measure the *reference* in bf16, not a fused kernel. What
+    remains is the one genuine reduced-precision measurement — sdpa in fp16 at a
+    single layer, the highest throughput anywhere in the log — which is worth
+    drawing precisely because it fails the tolerance from two layers up.
+    """
+    path = out_dir / "roofline_v2.png"
+    machine = RTX_4050_LAPTOP
+
+    data = roofline_frame(frame)
+    if data.empty:
+        raise SystemExit("no passing rows to plot")
+
+    fp32 = data[data["dtype"] == "float32"]
+    # Genuine reduced-precision work only: a fallback row (speedup ~1.0) is the
+    # baseline running in that dtype, not our kernel.
+    reduced = data[(data["dtype"] != "float32") & (data["speedup"] > 1.05)]
+    dropped = len(data) - len(fp32) - len(reduced)
+
+    with plt.rc_context(VIDEO_FONTS):
+        fig, ax = new_figure(9.0, 5.6)
+
+        # Roofs. Widened well past the data so the ridge corners are visible and
+        # nothing is crushed against a vertical rule.
+        lo, hi = 20.0, 700.0
+        xs = [lo * (hi / lo) ** (i / 200) for i in range(201)]
+        roofs = [
+            ("float32", machine.peak_fp32_tflops, "-", 2.4, True),
+            ("float16", machine.peak_fp16_tflops, ":", 2.0, False),
+            ("bfloat16", machine.peak_bf16_tflops, ":", 2.0, False),
+        ]
+        handles = []
+        for index, (dtype, peak, style, width, shippable) in enumerate(roofs):
+            ys = [min(machine.bandwidth_gbs * xi / 1000.0, peak) for xi in xs]
+            colour = INK["primary"] if shippable else INK["muted"]
+            line, = ax.plot(xs, ys, style, color=colour, linewidth=width, zorder=2)
+            ridge = ridge_point(peak, machine.bandwidth_gbs)
+            ax.plot([ridge], [peak], marker="|", markersize=13,
+                    color=colour, zorder=3)
+            # Short labels on purpose: the legend has to fit in the empty
+            # right-hand quarter without covering any measured point.
+            short = {"float32": "fp32", "float16": "fp16", "bfloat16": "bf16"}[dtype]
+            label = (f"{short} roof · {peak:g}" if shippable
+                     else f"{short} roof · {peak:g} — unreachable")
+            line.set_label(label)
+            handles.append(line)
+
+        # fp32 points, shape by strategy.
+        for index, (strategy, marker) in enumerate(_STRATEGY_MARKERS.items()):
+            group = fp32[fp32["strategy_name"] == strategy]
+            if group.empty:
+                continue
+            ax.scatter(group["intensity"], group["achieved_tflops"],
+                       marker=marker, s=95, color=color_for(index),
+                       edgecolors="white", linewidths=0.8, zorder=5,
+                       label=f"{strategy}, fp32")
+
+        # The one real reduced-precision datapoint.
+        if not reduced.empty:
+            ax.scatter(reduced["intensity"], reduced["achieved_tflops"],
+                       marker="*", s=320, color=STATUS["warning"],
+                       edgecolors=INK["primary"], linewidths=1.0, zorder=6,
+                       label="sdpa fp16, 1 layer")
+            # Parked in the empty wedge above the fp32 roof and left of the
+            # fp16 ridge, with a leader to the point — anywhere nearer the star
+            # crosses either the roof line or the legend.
+            ax.annotate(
+                f"fp16 reaches {reduced['achieved_tflops'].max():.1f} TFLOP/s —\n"
+                "the highest measured anywhere,\nand it fails from two layers up",
+                xy=(float(reduced["intensity"].max()),
+                    float(reduced["achieved_tflops"].max())),
+                xycoords="data",
+                xytext=(0.03, 0.90), textcoords="axes fraction",
+                fontsize=12.5, color=INK["secondary"], ha="left", va="top",
+                arrowprops=dict(arrowstyle="-", color=INK["muted"],
+                                linewidth=1.0, connectionstyle="arc3,rad=-0.15"),
+            )
+
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(2.0, 34.0)
+
+        # Explicit majors, no minor labels. Decades alone would leave a single
+        # tick across this range, so the majors are decade-anchored round
+        # numbers rather than powers of ten only.
+        from matplotlib.ticker import FixedLocator, NullFormatter, ScalarFormatter
+        ax.xaxis.set_major_locator(FixedLocator([20, 50, 100, 200, 500]))
+        ax.xaxis.set_major_formatter(ScalarFormatter())
+        ax.xaxis.set_minor_formatter(NullFormatter())
+        ax.yaxis.set_major_locator(FixedLocator([2, 5, 10, 20, 30]))
+        ax.yaxis.set_major_formatter(ScalarFormatter())
+        ax.yaxis.set_minor_formatter(NullFormatter())
+
+        ax.set_xlabel("arithmetic intensity (FLOP / byte)")
+        ax.set_ylabel("achieved throughput (TFLOP/s)")
+        ax.legend(loc="lower right", frameon=True, framealpha=0.96,
+                  edgecolor=INK["grid"], fontsize=11.5, borderpad=0.7,
+                  labelspacing=0.45, handletextpad=0.7)
+
+        finish(fig, ax, "Two of the three roofs are unreachable",
+               f"{machine.name} · {machine.bandwidth_gbs:g} GB/s measured · "
+               "ridge marked per dtype")
+        saved = _save(fig, path)
+
+    if dropped:
+        print(f"  note: dropped {dropped} baseline-fallback reduced-precision "
+              f"point(s) — those measure the reference, not a fused kernel")
+    return saved
+
+
 def main() -> int:
     frame = load_results(RESULTS)
     print(f"read {len(frame)} rows from {RESULTS.relative_to(ROOT)}")
@@ -231,6 +367,9 @@ def main() -> int:
 
     acc = accuracy_budget_v2(frame)
     print(f"wrote {acc.relative_to(ROOT)}")
+
+    roof = roofline_v2(frame)
+    print(f"wrote {roof.relative_to(ROOT)}")
 
     print("\noriginals untouched — `python -m analysis.make_all` still regenerates them.")
     return 0
