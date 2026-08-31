@@ -35,6 +35,7 @@ import pandas as pd
 __all__ = [
     "load_results", "latest_per_config", "geometric_mean_speedup",
     "speedup_summary", "SpeedupSummary", "crossover_table", "dispatch_choices",
+    "SUPERSEDING_STATUSES", "aggregation_source",
     "write_dispatch_table", "results_markdown_table", "status_counts",
     "CONFIG_FIELDS", "DISPATCH_FIELDS",
 ]
@@ -153,24 +154,56 @@ def usable(frame: pd.DataFrame, include_compiled_baseline: bool = False) -> pd.D
     return subset
 
 
+#: Statuses that carry a *verdict* about a configuration, and may therefore
+#: supersede an earlier verdict for the same configuration.
+#:
+#: SKIPPED and DISCARDED are deliberately absent. A skipped row means the config
+#: was never run and a discarded one means its timing is untrustworthy — neither
+#: is a correction, so neither should erase a real earlier measurement.
+SUPERSEDING_STATUSES = frozenset({"PASS", "FAIL", "OOM_BASELINE"})
+
+
 def latest_per_config(
     frame: pd.DataFrame, only_pass: bool = True,
     include_compiled_baseline: bool = False,
 ) -> pd.DataFrame:
-    """Newest row per (strategy, config), so a re-run supersedes its predecessor.
+    """Newest verdict per (strategy, config), then optionally the passing ones.
 
-    A sweep gets re-run after a fix; without this, the old rows would still be
-    averaged in and a fixed strategy would look worse than it is.
+    The order of these two operations is the whole point, and getting it wrong
+    is silent. Filtering to passing rows *before* taking the newest means a
+    later FAIL can never supersede an earlier PASS: the correcting row is
+    removed from the candidate set before the comparison happens, so a
+    configuration that was re-run and found to fail keeps reporting the speedup
+    from the run that passed. That is exactly backwards — a re-run exists
+    because the earlier result was in doubt.
+
+    So: group over every row that carries a verdict, take the newest per
+    configuration, and only then keep the passing ones. A configuration whose
+    latest verdict is FAIL drops out entirely rather than reverting to its last
+    good number.
+
+    Compiled-baseline rows are excluded before grouping for the same reason they
+    are excluded from `usable`: they are a different experiment, not a newer run
+    of this one, so they must never supersede.
     """
-    subset = usable(frame, include_compiled_baseline) if only_pass else frame
-    if subset.empty:
-        return subset
-    ordered = subset.sort_values("timestamp")
-    return (
-        ordered.groupby(["strategy_name", "config_key"], as_index=False, sort=False)
+    if frame.empty:
+        return frame
+
+    candidates = frame
+    if not include_compiled_baseline:
+        candidates = candidates[candidates["compile_baseline"] != True]  # noqa: E712
+    candidates = candidates[candidates["status"].isin(SUPERSEDING_STATUSES)]
+    if candidates.empty:
+        return candidates
+
+    latest = (
+        candidates.sort_values("timestamp")
+        .groupby(["strategy_name", "config_key"], as_index=False, sort=False)
         .tail(1)
-        .reset_index(drop=True)
     )
+    if only_pass:
+        latest = latest[(latest["status"] == "PASS") & latest["speedup"].notna()]
+    return latest.reset_index(drop=True)
 
 
 @dataclass(frozen=True)
@@ -182,16 +215,33 @@ class SpeedupSummary:
     n: int
 
 
+def aggregation_source(frame: pd.DataFrame, only_pass: bool = True) -> pd.DataFrame:
+    """The rows a summary statistic may be taken over: one per configuration.
+
+    Averaging raw rows weights a configuration by how many times it happened to
+    be re-run, which is a property of the sweep's history and not of the
+    implementation. A config swept ten times while another was swept once would
+    dominate the mean for no reason at all — and superseded rows, including ones
+    a later run corrected, would still be counted.
+
+    Frames that predate the config columns (hand-built toys, partial loads) fall
+    back to the raw filter, since there is nothing to group on.
+    """
+    if "config_key" not in frame.columns or "timestamp" not in frame.columns:
+        return usable(frame) if only_pass else frame
+    return latest_per_config(frame, only_pass=only_pass)
+
+
 def geometric_mean_speedup(
     frame: pd.DataFrame, strategy: str, only_pass: bool = True
 ) -> float:
-    """Geometric mean of a strategy's speedups. NaN if it has none.
+    """Geometric mean of a strategy's speedups, one row per configuration.
 
     Geometric, not arithmetic: speedups are ratios. A strategy that is 2x on one
     shape and 0.5x on another has done nothing on average, and only the
     geometric mean says so -- the arithmetic mean would call it 1.25x.
     """
-    subset = usable(frame) if only_pass else frame
+    subset = aggregation_source(frame, only_pass)
     values = subset.loc[subset["strategy_name"] == strategy, "speedup"].dropna()
     values = values[values > 0]
     if values.empty:
@@ -202,8 +252,8 @@ def geometric_mean_speedup(
 def speedup_summary(
     frame: pd.DataFrame, strategies: Optional[Sequence[str]] = None
 ) -> List[SpeedupSummary]:
-    """Per-strategy geomean/min/max/n, best first."""
-    subset = usable(frame)
+    """Per-strategy geomean/min/max/n, best first. `n` counts configurations."""
+    subset = aggregation_source(frame)
     names = strategies if strategies is not None else sorted(subset["strategy_name"].unique())
     out = []
     for name in names:

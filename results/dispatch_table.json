@@ -7,11 +7,11 @@
     "8,512,256,8,float32,False,False": "sdpa",
     "8,512,1024,8,float32,False,False": "sdpa",
     "8,512,512,8,float32,False,True": "sdpa",
-    "8,512,512,8,float32,True,False": "sdpa",
-    "8,512,512,8,float32,True,True": "sdpa",
     "8,512,512,8,float32,False,False": "sdpa",
     "8,512,512,8,float16,False,False": "sdpa",
-    "8,512,512,8,bfloat16,False,False": "optimized"
+    "8,512,512,8,bfloat16,False,False": "optimized",
+    "8,512,512,8,float32,True,False": "optimized",
+    "8,512,512,8,float32,True,True": "optimized"
   },
   "default": "sdpa",
   "meta": {
@@ -20,8 +20,8 @@
     "n_dispatch_keys": 12,
     "n_measured_configs": 16,
     "geometric_mean_speedup": {
-      "sdpa": 1.5295,
-      "optimized": 1.351,
+      "sdpa": 1.5312,
+      "optimized": 1.3218,
       "baseline": 0.9937
     },
     "status_counts": {

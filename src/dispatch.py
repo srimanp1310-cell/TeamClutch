@@ -440,6 +440,14 @@ def select_strategy(
 
     `available` defaults to the live strategy registry; pass a mapping to test
     selection independently of what happens to be registered.
+
+    **This function is depth-blind.** `DispatchKey` carries no layer count, and
+    numerical admissibility can depend on one: fp16 passes at a single layer and
+    fails from two, once error has compounded through the residual stream. A
+    strategy declaring `SUPPORTED_DTYPES = (float32, float16)` is telling the
+    truth, and this function will still offer it an fp16 tensor at six layers
+    where it fails. Any such depth rule belongs in the entry point that knows
+    the config -- `src/optimized.py` -- not here. See TECH_REPORT §7.2.
     """
     return _decide_for(key, capability, table_path, available).strategy
 
